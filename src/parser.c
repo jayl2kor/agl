@@ -164,25 +164,15 @@ static AgoNode *parse_prefix(AgoParser *p) {
          * Only if current is { AND the token after { is IDENT followed by : */
         AgoNode *id = parse_identifier(p);
         if (!parser_check(p, AGO_TOKEN_LBRACE)) return id;
-        /* Lookahead: save position and check if it's really ident : pattern */
+        /* Lookahead: probe a copy of the lexer to check for ident : pattern.
+         * No restore needed — probe is a stack copy, not p->lexer itself. */
         {
-            const char *saved_cur = p->lexer.current;
-            int saved_line = p->lexer.line;
-            int saved_col = p->lexer.column;
-            int saved_depth = p->lexer.paren_depth;
-            bool saved_insert = p->lexer.insert_newline;
-            AgoToken saved_token = p->current;
-            /* Advance past { */
             AgoLexer probe = p->lexer;
             AgoToken t1 = ago_lexer_next_token(&probe); /* skip { */
-            /* Skip newlines */
             while (t1.kind == AGO_TOKEN_NEWLINE) t1 = ago_lexer_next_token(&probe);
             AgoToken t2 = ago_lexer_next_token(&probe);
             bool is_struct = (t1.kind == AGO_TOKEN_IDENT && t2.kind == AGO_TOKEN_COLON)
                           || t1.kind == AGO_TOKEN_RBRACE; /* empty struct {} */
-            /* Restore — we only peeked */
-            (void)saved_cur; (void)saved_line; (void)saved_col;
-            (void)saved_depth; (void)saved_insert; (void)saved_token;
             if (!is_struct) return id;
         }
         parser_advance(p); /* consume { */
@@ -196,6 +186,7 @@ static AgoNode *parse_prefix(AgoParser *p) {
         while (!parser_check(p, AGO_TOKEN_RBRACE) && !parser_check(p, AGO_TOKEN_EOF)) {
             parser_expect(p, AGO_TOKEN_IDENT, "expected field name");
             if (ago_error_occurred(p->ctx)) return NULL;
+            if (fcount >= 64) { ago_error_set(p->ctx, AGO_ERR_SYNTAX, ago_loc(p->lexer.file, p->current.line, p->current.column), "too many struct fields (max 64)"); return NULL; }
             fnames[fcount] = p->previous.start;
             fname_lens[fcount] = p->previous.length;
             parser_expect(p, AGO_TOKEN_COLON, "expected ':' after field name");
@@ -228,6 +219,7 @@ static AgoNode *parse_prefix(AgoParser *p) {
         if (!parser_check(p, AGO_TOKEN_RBRACKET)) {
             do {
                 skip_newlines(p);
+                if (count >= 128) { ago_error_set(p->ctx, AGO_ERR_SYNTAX, ago_loc(p->lexer.file, p->current.line, p->current.column), "too many array elements (max 128)"); return NULL; }
                 elems[count++] = parse_expression(p, PREC_NONE);
                 if (ago_error_occurred(p->ctx)) return NULL;
                 skip_newlines(p);
@@ -516,6 +508,7 @@ static AgoNode *parse_fn_declaration(AgoParser *p) {
     if (!parser_check(p, AGO_TOKEN_RPAREN)) {
         do {
             skip_newlines(p);
+            if (param_count >= 64) { ago_error_set(p->ctx, AGO_ERR_SYNTAX, ago_loc(p->lexer.file, p->current.line, p->current.column), "too many parameters (max 64)"); return NULL; }
             parser_expect(p, AGO_TOKEN_IDENT, "expected parameter name");
             if (ago_error_occurred(p->ctx)) return NULL;
             param_names[param_count] = p->previous.start;
@@ -611,6 +604,7 @@ static AgoNode *parse_statement(AgoParser *p) {
         int fcount = 0;
         skip_newlines(p);
         while (!parser_check(p, AGO_TOKEN_RBRACE) && !parser_check(p, AGO_TOKEN_EOF)) {
+            if (fcount >= 64) { ago_error_set(p->ctx, AGO_ERR_SYNTAX, ago_loc(p->lexer.file, p->current.line, p->current.column), "too many struct fields (max 64)"); return NULL; }
             parser_expect(p, AGO_TOKEN_IDENT, "expected field name");
             if (ago_error_occurred(p->ctx)) return NULL;
             fnames[fcount] = p->previous.start; flens[fcount] = p->previous.length;

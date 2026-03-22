@@ -407,6 +407,97 @@ AGO_TEST(test_struct_in_function) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "7\n");
 }
 
+/* ---- Float arithmetic ---- */
+
+AGO_TEST(test_float_add) {
+    int r = run_and_capture("print(1.5 + 2.5)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "4\n");
+}
+
+AGO_TEST(test_float_mul) {
+    int r = run_and_capture("print(2.5 * 4.0)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "10\n");
+}
+
+AGO_TEST(test_int_float_mixed) {
+    int r = run_and_capture("print(1 + 0.5)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "1.5\n");
+}
+
+/* ---- Error path tests ---- */
+
+AGO_TEST(test_err_div_by_zero) {
+    int r = run_and_capture("print(1 / 0)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_mod_by_zero) {
+    int r = run_and_capture("print(1 % 0)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_undefined_variable) {
+    int r = run_and_capture("print(x)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_unknown_function) {
+    int r = run_and_capture("foo()");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_wrong_arg_count) {
+    int r = run_and_capture(
+        "fn add(a: int, b: int) -> int { return a + b }\n"
+        "print(add(1))");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_type_mismatch) {
+    int r = run_and_capture("print(1 + true)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_unary_type) {
+    int r = run_and_capture("print(!5)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_index_non_array) {
+    int r = run_and_capture("let x = 5\nprint(x[0])");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_negative_index) {
+    int r = run_and_capture("let arr = [1, 2]\nprint(arr[-1])");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_for_non_array) {
+    int r = run_and_capture("for x in 5 {\n    print(x)\n}");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+AGO_TEST(test_err_len_wrong_type) {
+    int r = run_and_capture("print(len(42))");
+    AGO_ASSERT(ctx, r != 0);
+}
+
+/* ---- Else-if chain ---- */
+
+AGO_TEST(test_else_if_chain) {
+    int r = run_and_capture(
+        "let x = 2\n"
+        "if x == 1 {\n    print(\"one\")\n"
+        "} else if x == 2 {\n    print(\"two\")\n"
+        "} else {\n    print(\"other\")\n}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "two\n");
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -469,6 +560,27 @@ int main(void) {
     /* Structs */
     AGO_RUN_TEST(&ctx, test_struct_create);
     AGO_RUN_TEST(&ctx, test_struct_in_function);
+
+    /* Float arithmetic */
+    AGO_RUN_TEST(&ctx, test_float_add);
+    AGO_RUN_TEST(&ctx, test_float_mul);
+    AGO_RUN_TEST(&ctx, test_int_float_mixed);
+
+    /* Error paths */
+    AGO_RUN_TEST(&ctx, test_err_div_by_zero);
+    AGO_RUN_TEST(&ctx, test_err_mod_by_zero);
+    AGO_RUN_TEST(&ctx, test_err_undefined_variable);
+    AGO_RUN_TEST(&ctx, test_err_unknown_function);
+    AGO_RUN_TEST(&ctx, test_err_wrong_arg_count);
+    AGO_RUN_TEST(&ctx, test_err_type_mismatch);
+    AGO_RUN_TEST(&ctx, test_err_unary_type);
+    AGO_RUN_TEST(&ctx, test_err_index_non_array);
+    AGO_RUN_TEST(&ctx, test_err_negative_index);
+    AGO_RUN_TEST(&ctx, test_err_for_non_array);
+    AGO_RUN_TEST(&ctx, test_err_len_wrong_type);
+
+    /* Else-if */
+    AGO_RUN_TEST(&ctx, test_else_if_chain);
 
     AGO_SUMMARY(&ctx);
 }

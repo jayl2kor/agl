@@ -120,6 +120,7 @@ static int env_assign(AgoEnv *env, const char *name, int length, AgoVal val) {
 typedef struct {
     AgoEnv env;
     AgoCtx *ctx;
+    AgoArena *arena;    /* runtime allocations (arrays, structs, fn vals) */
     /* Return mechanism */
     bool has_return;
     AgoVal return_value;
@@ -224,10 +225,16 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
 
     /* Bind parameters */
     for (int i = 0; i < param_count; i++) {
-        env_define(&interp->env,
-                   decl->as.fn_decl.param_names[i],
-                   decl->as.fn_decl.param_name_lengths[i],
-                   args[i], true);
+        if (!env_define(&interp->env,
+                        decl->as.fn_decl.param_names[i],
+                        decl->as.fn_decl.param_name_lengths[i],
+                        args[i], true)) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, call_node->line, call_node->column),
+                          "too many variables (max %d)", MAX_VARS);
+            interp->env.count = saved_count;
+            return val_nil();
+        }
     }
 
     /* Execute body with return support */
@@ -372,6 +379,44 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
             }
         }
 
+        /* Float arithmetic */
+        if (left.kind == VAL_FLOAT && right.kind == VAL_FLOAT) {
+            double l = left.as.floating, r = right.as.floating;
+            switch (op) {
+            case AGO_TOKEN_PLUS:    return val_float(l + r);
+            case AGO_TOKEN_MINUS:   return val_float(l - r);
+            case AGO_TOKEN_STAR:    return val_float(l * r);
+            case AGO_TOKEN_SLASH:   return val_float(l / r);
+            case AGO_TOKEN_EQ:      return val_bool(l == r);
+            case AGO_TOKEN_NEQ:     return val_bool(l != r);
+            case AGO_TOKEN_LT:      return val_bool(l < r);
+            case AGO_TOKEN_GT:      return val_bool(l > r);
+            case AGO_TOKEN_LE:      return val_bool(l <= r);
+            case AGO_TOKEN_GE:      return val_bool(l >= r);
+            default: break;
+            }
+        }
+
+        /* Int-float promotion */
+        if ((left.kind == VAL_INT && right.kind == VAL_FLOAT) ||
+            (left.kind == VAL_FLOAT && right.kind == VAL_INT)) {
+            double l = left.kind == VAL_FLOAT ? left.as.floating : (double)left.as.integer;
+            double r = right.kind == VAL_FLOAT ? right.as.floating : (double)right.as.integer;
+            switch (op) {
+            case AGO_TOKEN_PLUS:    return val_float(l + r);
+            case AGO_TOKEN_MINUS:   return val_float(l - r);
+            case AGO_TOKEN_STAR:    return val_float(l * r);
+            case AGO_TOKEN_SLASH:   return val_float(l / r);
+            case AGO_TOKEN_EQ:      return val_bool(l == r);
+            case AGO_TOKEN_NEQ:     return val_bool(l != r);
+            case AGO_TOKEN_LT:      return val_bool(l < r);
+            case AGO_TOKEN_GT:      return val_bool(l > r);
+            case AGO_TOKEN_LE:      return val_bool(l <= r);
+            case AGO_TOKEN_GE:      return val_bool(l >= r);
+            default: break;
+            }
+        }
+
         if (left.kind == VAL_BOOL && right.kind == VAL_BOOL) {
             bool l = left.as.boolean, r = right.as.boolean;
             switch (op) {
@@ -390,18 +435,17 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_ARRAY_LIT: {
-        static AgoArrayVal arr_storage[256];
-        static AgoVal elem_storage[4096];
-        static int arr_idx = 0;
-        static int elem_idx = 0;
-        if (arr_idx >= 256) { arr_idx = 0; } /* wrap for simplicity */
-        AgoArrayVal *arr = &arr_storage[arr_idx++];
+        AgoArrayVal *arr = ago_arena_alloc(interp->arena, sizeof(AgoArrayVal));
+        if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
         arr->count = node->as.array_lit.count;
-        arr->elements = &elem_storage[elem_idx];
+        arr->elements = NULL;
+        if (arr->count > 0) {
+            arr->elements = ago_arena_alloc(interp->arena, sizeof(AgoVal) * (size_t)arr->count);
+            if (!arr->elements) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+        }
         for (int i = 0; i < arr->count; i++) {
-            elem_storage[elem_idx++] = eval_expr(interp, node->as.array_lit.elements[i]);
+            arr->elements[i] = eval_expr(interp, node->as.array_lit.elements[i]);
             if (ago_error_occurred(interp->ctx)) return val_nil();
-            if (elem_idx >= 4096) elem_idx = 0;
         }
         AgoVal v;
         v.kind = VAL_ARRAY;
@@ -437,10 +481,8 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_STRUCT_LIT: {
-        static AgoStructVal struct_storage[128];
-        static int struct_idx = 0;
-        if (struct_idx >= 128) struct_idx = 0;
-        AgoStructVal *s = &struct_storage[struct_idx++];
+        AgoStructVal *s = ago_arena_alloc(interp->arena, sizeof(AgoStructVal));
+        if (!s) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
         s->type_name = node->as.struct_lit.name;
         s->type_name_length = node->as.struct_lit.name_length;
         s->field_count = node->as.struct_lit.field_count;
@@ -495,11 +537,17 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
                 return call_user_fn(interp, fn_val->as.fn, node);
             }
         }
-        ago_error_set(interp->ctx, AGO_ERR_NAME,
-                      ago_loc(NULL, node->line, node->column),
-                      "unknown function '%.*s'",
-                      node->as.call.callee->as.ident.length,
-                      node->as.call.callee->as.ident.name);
+        if (node->as.call.callee->kind == AGO_NODE_IDENT) {
+            ago_error_set(interp->ctx, AGO_ERR_NAME,
+                          ago_loc(NULL, node->line, node->column),
+                          "unknown function '%.*s'",
+                          node->as.call.callee->as.ident.length,
+                          node->as.call.callee->as.ident.name);
+        } else {
+            ago_error_set(interp->ctx, AGO_ERR_TYPE,
+                          ago_loc(NULL, node->line, node->column),
+                          "expression is not callable");
+        }
         return val_nil();
     }
 
@@ -606,8 +654,13 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
         }
         int saved = interp->env.count;
         /* Define loop variable */
-        env_define(&interp->env, node->as.for_stmt.var_name,
-                   node->as.for_stmt.var_name_length, val_nil(), false);
+        if (!env_define(&interp->env, node->as.for_stmt.var_name,
+                        node->as.for_stmt.var_name_length, val_nil(), false)) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, node->line, node->column),
+                          "too many variables (max %d)", MAX_VARS);
+            return;
+        }
         int var_idx = interp->env.count - 1;
         for (int i = 0; i < iterable.as.array->count; i++) {
             interp->env.values[var_idx] = iterable.as.array->elements[i];
@@ -625,21 +678,18 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
 
     case AGO_NODE_FN_DECL: {
         /* Register function in environment */
-        static AgoFnVal fn_storage[64];
-        static int fn_count = 0;
-        if (fn_count >= 64) {
-            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
-                          ago_loc(NULL, node->line, node->column),
-                          "too many function definitions");
-            return;
-        }
-        fn_storage[fn_count].decl = node;
+        AgoFnVal *fn = ago_arena_alloc(interp->arena, sizeof(AgoFnVal));
+        if (!fn) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return; }
+        fn->decl = node;
         AgoVal fn_val;
         fn_val.kind = VAL_FN;
-        fn_val.as.fn = &fn_storage[fn_count];
-        fn_count++;
-        env_define(&interp->env, node->as.fn_decl.name,
-                   node->as.fn_decl.name_length, fn_val, true);
+        fn_val.as.fn = fn;
+        if (!env_define(&interp->env, node->as.fn_decl.name,
+                        node->as.fn_decl.name_length, fn_val, true)) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, node->line, node->column),
+                          "too many variables (max %d)", MAX_VARS);
+        }
         break;
     }
 
@@ -664,18 +714,27 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
 int ago_interpret(AgoNode *program, AgoCtx *ctx) {
     if (!program || program->kind != AGO_NODE_PROGRAM) return -1;
 
+    /* Create a runtime arena for interpreter allocations */
+    AgoArena *runtime_arena = ago_arena_new();
+    if (!runtime_arena) return -1;
+
     AgoInterp interp;
     env_init(&interp.env);
     interp.ctx = ctx;
+    interp.arena = runtime_arena;
     interp.has_return = false;
     interp.return_value = val_nil();
     interp.return_jmp_set = false;
 
     for (int i = 0; i < program->as.program.decl_count; i++) {
         exec_stmt(&interp, program->as.program.decls[i]);
-        if (ago_error_occurred(ctx)) return -1;
+        if (ago_error_occurred(ctx)) {
+            ago_arena_free(runtime_arena);
+            return -1;
+        }
     }
 
+    ago_arena_free(runtime_arena);
     return 0;
 }
 
