@@ -1,0 +1,23 @@
+# Build artifacts
+*.o
+*.d
+*.dSYM/
+ago
+
+# Test binaries
+tests/test_lexer
+tests/test_parser
+tests/test_typechecker
+tests/test_interpreter
+tests/test_integration
+
+# OS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+everything-claude-code/
