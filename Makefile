@@ -18,7 +18,7 @@ src/%.o: src/%.c
 tests/test_%: tests/test_%.c $(OBJ)
 	$(CC) $(CFLAGS_DEBUG) -Isrc -o $@ $^
 
-test: tests/test_lexer tests/test_parser
+test: tests/test_lexer tests/test_parser tests/test_interpreter
 	@for t in $^; do echo ""; ./$$t || exit 1; done
 
 clean:
