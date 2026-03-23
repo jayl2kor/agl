@@ -860,6 +860,49 @@ AGO_TEST(test_string_len) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "5\n");
 }
 
+/* ---- String ordering ---- */
+
+AGO_TEST(test_string_less_than) {
+    int r = run_and_capture("print(\"apple\" < \"banana\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_string_greater_than) {
+    int r = run_and_capture("print(\"banana\" > \"apple\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_string_less_equal) {
+    int r = run_and_capture(
+        "print(\"abc\" <= \"abc\")\n"
+        "print(\"abc\" <= \"abd\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\ntrue\n");
+}
+
+AGO_TEST(test_string_greater_equal) {
+    int r = run_and_capture(
+        "print(\"xyz\" >= \"xyz\")\n"
+        "print(\"xyz\" >= \"xyy\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\ntrue\n");
+}
+
+AGO_TEST(test_string_order_prefix) {
+    /* shorter string is less than longer with same prefix */
+    int r = run_and_capture("print(\"ab\" < \"abc\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_string_order_false) {
+    int r = run_and_capture("print(\"banana\" < \"apple\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "false\n");
+}
+
 /* ---- Stdlib: Type and conversion ---- */
 
 AGO_TEST(test_type_int) {
@@ -1245,6 +1288,12 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_string_concat);
     AGO_RUN_TEST(&ctx, test_string_concat_multi);
     AGO_RUN_TEST(&ctx, test_string_len);
+    AGO_RUN_TEST(&ctx, test_string_less_than);
+    AGO_RUN_TEST(&ctx, test_string_greater_than);
+    AGO_RUN_TEST(&ctx, test_string_less_equal);
+    AGO_RUN_TEST(&ctx, test_string_greater_equal);
+    AGO_RUN_TEST(&ctx, test_string_order_prefix);
+    AGO_RUN_TEST(&ctx, test_string_order_false);
 
     /* Stdlib: Type and conversion */
     AGO_RUN_TEST(&ctx, test_type_int);

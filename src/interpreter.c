@@ -183,7 +183,7 @@ AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
             }
         }
 
-        /* String operations: ==, !=, + */
+        /* String operations: ==, !=, <, >, <=, >=, + */
         if (left.kind == VAL_STRING && right.kind == VAL_STRING) {
             int llen, rlen;
             const char *ldata = str_content(left, &llen);
@@ -193,6 +193,16 @@ AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
                 return val_bool(llen == rlen && memcmp(ldata, rdata, (size_t)llen) == 0);
             case AGO_TOKEN_NEQ:
                 return val_bool(llen != rlen || memcmp(ldata, rdata, (size_t)llen) != 0);
+            case AGO_TOKEN_LT: case AGO_TOKEN_GT:
+            case AGO_TOKEN_LE: case AGO_TOKEN_GE: {
+                int minlen = llen < rlen ? llen : rlen;
+                int cmp = memcmp(ldata, rdata, (size_t)minlen);
+                if (cmp == 0) cmp = (llen > rlen) - (llen < rlen);
+                if (op == AGO_TOKEN_LT) return val_bool(cmp < 0);
+                if (op == AGO_TOKEN_GT) return val_bool(cmp > 0);
+                if (op == AGO_TOKEN_LE) return val_bool(cmp <= 0);
+                return val_bool(cmp >= 0);
+            }
             case AGO_TOKEN_PLUS: {
                 if (llen > INT_MAX - rlen) {
                     ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
