@@ -173,28 +173,28 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node);
 static void mark_val(AgoVal val) {
     switch (val.kind) {
     case VAL_ARRAY:
-        if (!val.as.array) break;
+        if (!val.as.array || val.as.array->obj.marked) break;
         ago_gc_mark(&val.as.array->obj);
         for (int i = 0; i < val.as.array->count; i++) {
             mark_val(val.as.array->elements[i]);
         }
         break;
     case VAL_STRUCT:
-        if (!val.as.strct) break;
+        if (!val.as.strct || val.as.strct->obj.marked) break;
         ago_gc_mark(&val.as.strct->obj);
         for (int i = 0; i < val.as.strct->field_count; i++) {
             mark_val(val.as.strct->field_values[i]);
         }
         break;
     case VAL_FN:
-        if (!val.as.fn) break;
+        if (!val.as.fn || val.as.fn->obj.marked) break;
         ago_gc_mark(&val.as.fn->obj);
         for (int i = 0; i < val.as.fn->captured_count; i++) {
             mark_val(val.as.fn->captured_values[i]);
         }
         break;
     case VAL_RESULT:
-        if (!val.as.result) break;
+        if (!val.as.result || val.as.result->obj.marked) break;
         ago_gc_mark(&val.as.result->obj);
         mark_val(val.as.result->value);
         break;
@@ -675,6 +675,10 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
             return val_nil();
         }
         fn->decl = node;
+        fn->captured_names = NULL;
+        fn->captured_name_lengths = NULL;
+        fn->captured_values = NULL;
+        fn->captured_immutable = NULL;
         fn->captured_count = interp->env.count;
         if (fn->captured_count > 0) {
             size_t n_cap = (size_t)fn->captured_count;

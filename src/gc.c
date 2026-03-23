@@ -29,6 +29,7 @@ void *ago_gc_alloc(AgoGc *gc, size_t size, void (*cleanup)(void *)) {
     if (!mem) return NULL;
     AgoObj *obj = mem;
     obj->next = gc->objects;
+    obj->size = size;
     obj->marked = false;
     obj->cleanup = cleanup;
     gc->objects = obj;
@@ -43,6 +44,7 @@ void ago_gc_sweep(AgoGc *gc) {
         if (!(*p)->marked) {
             AgoObj *unreached = *p;
             *p = unreached->next;
+            gc->bytes_allocated -= unreached->size;
             if (unreached->cleanup) unreached->cleanup(unreached);
             free(unreached);
             gc->object_count--;

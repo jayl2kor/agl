@@ -37,9 +37,15 @@ static AgoScope *scope_new(AgoSema *sema, AgoScope *parent) {
     return s;
 }
 
-static void scope_push(AgoSema *sema) {
+static bool scope_push(AgoSema *sema) {
     AgoScope *s = scope_new(sema, sema->scope);
-    if (s) sema->scope = s;
+    if (!s) {
+        ago_error_set(sema->ctx, AGO_ERR_RUNTIME,
+                      ago_loc(NULL, 0, 0), "out of memory");
+        return false;
+    }
+    sema->scope = s;
+    return true;
 }
 
 static void scope_pop(AgoSema *sema) {
@@ -126,7 +132,7 @@ static void check_expr(AgoSema *sema, AgoNode *node) {
                                           node->as.call.callee->as.ident.length);
             if (fn && fn->is_function &&
                 node->as.call.arg_count != fn->arity) {
-                ago_error_set(sema->ctx, AGO_ERR_RUNTIME,
+                ago_error_set(sema->ctx, AGO_ERR_TYPE,
                               ago_loc(NULL, node->line, node->column),
                               "expected %d arguments, got %d",
                               fn->arity, node->as.call.arg_count);
@@ -192,6 +198,8 @@ static void check_expr(AgoSema *sema, AgoNode *node) {
         break;
 
     default:
+        /* Statement nodes handled in check_stmt; future expression nodes
+         * must be added here or sema will silently pass unchecked code. */
         break;
     }
 }
@@ -231,7 +239,7 @@ static void check_stmt(AgoSema *sema, AgoNode *node) {
                           node->as.assign_stmt.name_length,
                           node->as.assign_stmt.name);
         } else if (!v->is_mutable) {
-            ago_error_set(sema->ctx, AGO_ERR_RUNTIME,
+            ago_error_set(sema->ctx, AGO_ERR_TYPE,
                           ago_loc(NULL, node->line, node->column),
                           "cannot assign to immutable variable '%.*s'",
                           node->as.assign_stmt.name_length,

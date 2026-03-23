@@ -7,8 +7,9 @@
  * The interpreter casts between AgoObj* and the concrete type. */
 typedef struct AgoObj {
     struct AgoObj *next;            /* intrusive linked list of all objects */
-    bool marked;
+    size_t size;                    /* allocation size for GC accounting */
     void (*cleanup)(void *obj);     /* free internal buffers before sweep */
+    bool marked;
 } AgoObj;
 
 /* GC state */
