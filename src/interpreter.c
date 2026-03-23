@@ -75,6 +75,17 @@ struct AgoResultVal {
     AgoVal value;
 };
 
+/* ---- String content helper: strips quotes if present ---- */
+
+static const char *str_content(AgoVal s, int *out_len) {
+    if (s.as.string.length >= 2 && s.as.string.data[0] == '"') {
+        *out_len = s.as.string.length - 2;
+        return s.as.string.data + 1;
+    }
+    *out_len = s.as.string.length;
+    return s.as.string.data;
+}
+
 /* ---- Cleanup functions for GC ---- */
 
 static void array_cleanup(void *p) {
@@ -629,6 +640,28 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
             }
         }
 
+        /* String operations: ==, !=, + */
+        if (left.kind == VAL_STRING && right.kind == VAL_STRING) {
+            int llen, rlen;
+            const char *ldata = str_content(left, &llen);
+            const char *rdata = str_content(right, &rlen);
+            switch (op) {
+            case AGO_TOKEN_EQ:
+                return val_bool(llen == rlen && memcmp(ldata, rdata, (size_t)llen) == 0);
+            case AGO_TOKEN_NEQ:
+                return val_bool(llen != rlen || memcmp(ldata, rdata, (size_t)llen) != 0);
+            case AGO_TOKEN_PLUS: {
+                int total = llen + rlen;
+                char *buf = ago_arena_alloc(interp->arena, (size_t)total);
+                if (!buf) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+                memcpy(buf, ldata, (size_t)llen);
+                memcpy(buf + llen, rdata, (size_t)rlen);
+                return val_string(buf, total);
+            }
+            default: break;
+            }
+        }
+
         ago_error_set(interp->ctx, AGO_ERR_TYPE,
                       ago_loc(NULL, node->line, node->column),
                       "invalid binary operation");
@@ -820,10 +853,300 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
                 AgoVal arg = eval_expr(interp, node->as.call.args[0]);
                 if (ago_error_occurred(interp->ctx)) return val_nil();
                 if (arg.kind == VAL_ARRAY) return val_int(arg.as.array->count);
-                if (arg.kind == VAL_STRING) return val_int(arg.as.string.length - 2);
+                if (arg.kind == VAL_STRING) {
+                    int slen; str_content(arg, &slen);
+                    return val_int(slen);
+                }
                 ago_error_set(interp->ctx, AGO_ERR_TYPE,
                               ago_loc(NULL, node->line, node->column),
                               "len() requires an array or string");
+                return val_nil();
+            }
+
+            /* Built-in type(val) -> string */
+            if (ago_str_eq(name, len, "type", 4)) {
+                if (node->as.call.arg_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "type() takes exactly 1 argument");
+                    return val_nil();
+                }
+                AgoVal arg = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                const char *tname;
+                switch (arg.kind) {
+                case VAL_INT:    tname = "int"; break;
+                case VAL_FLOAT:  tname = "float"; break;
+                case VAL_BOOL:   tname = "bool"; break;
+                case VAL_STRING: tname = "string"; break;
+                case VAL_FN:     tname = "fn"; break;
+                case VAL_ARRAY:  tname = "array"; break;
+                case VAL_STRUCT: tname = "struct"; break;
+                case VAL_RESULT: tname = "result"; break;
+                case VAL_NIL:    tname = "nil"; break;
+                default:         tname = "unknown"; break;
+                }
+                return val_string(tname, (int)strlen(tname));
+            }
+
+            /* Built-in str(val) -> string */
+            if (ago_str_eq(name, len, "str", 3)) {
+                if (node->as.call.arg_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "str() takes exactly 1 argument");
+                    return val_nil();
+                }
+                AgoVal arg = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                char buf[128];
+                int n = 0;
+                switch (arg.kind) {
+                case VAL_INT:    n = snprintf(buf, sizeof(buf), "%lld", (long long)arg.as.integer); break;
+                case VAL_FLOAT:  n = snprintf(buf, sizeof(buf), "%g", arg.as.floating); break;
+                case VAL_BOOL:   n = snprintf(buf, sizeof(buf), "%s", arg.as.boolean ? "true" : "false"); break;
+                case VAL_STRING: {
+                    int slen; const char *sd = str_content(arg, &slen);
+                    char *copy = ago_arena_alloc(interp->arena, (size_t)slen);
+                    if (copy) memcpy(copy, sd, (size_t)slen);
+                    return val_string(copy ? copy : "", copy ? slen : 0);
+                }
+                case VAL_NIL:    n = snprintf(buf, sizeof(buf), "nil"); break;
+                default:         n = snprintf(buf, sizeof(buf), "<%s>", "object"); break;
+                }
+                char *s = ago_arena_alloc(interp->arena, (size_t)n);
+                if (s) memcpy(s, buf, (size_t)n);
+                return val_string(s ? s : "", s ? n : 0);
+            }
+
+            /* Built-in int(string) -> int */
+            if (ago_str_eq(name, len, "int", 3)) {
+                if (node->as.call.arg_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "int() takes exactly 1 argument");
+                    return val_nil();
+                }
+                AgoVal arg = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arg.kind == VAL_STRING) {
+                    int slen; const char *sd = str_content(arg, &slen);
+                    char tmp[64];
+                    if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+                    memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+                    return val_int(strtoll(tmp, NULL, 10));
+                }
+                if (arg.kind == VAL_FLOAT) return val_int((int64_t)arg.as.floating);
+                if (arg.kind == VAL_INT) return arg;
+                ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "int() cannot convert this type");
+                return val_nil();
+            }
+
+            /* Built-in float(string) -> float */
+            if (ago_str_eq(name, len, "float", 5)) {
+                if (node->as.call.arg_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "float() takes exactly 1 argument");
+                    return val_nil();
+                }
+                AgoVal arg = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arg.kind == VAL_STRING) {
+                    int slen; const char *sd = str_content(arg, &slen);
+                    char tmp[64];
+                    if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+                    memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+                    return val_float(strtod(tmp, NULL));
+                }
+                if (arg.kind == VAL_INT) return val_float((double)arg.as.integer);
+                if (arg.kind == VAL_FLOAT) return arg;
+                ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "float() cannot convert this type");
+                return val_nil();
+            }
+
+            /* Built-in push(arr, val) -> new array */
+            if (ago_str_eq(name, len, "push", 4)) {
+                if (node->as.call.arg_count != 2) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "push() takes exactly 2 arguments");
+                    return val_nil();
+                }
+                AgoVal arr_val = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                AgoVal elem = eval_expr(interp, node->as.call.args[1]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arr_val.kind != VAL_ARRAY) {
+                    ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "push() first argument must be an array");
+                    return val_nil();
+                }
+                AgoArrayVal *old = arr_val.as.array;
+                int new_count = old->count + 1;
+                AgoArrayVal *arr = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
+                if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+                arr->count = new_count;
+                arr->elements = malloc(sizeof(AgoVal) * (size_t)new_count);
+                if (!arr->elements) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+                memcpy(arr->elements, old->elements, sizeof(AgoVal) * (size_t)old->count);
+                arr->elements[old->count] = elem;
+                AgoVal v; v.kind = VAL_ARRAY; v.as.array = arr;
+                return v;
+            }
+
+            /* Built-in map(arr, fn) -> new array */
+            if (ago_str_eq(name, len, "map", 3) && node->as.call.arg_count == 2) {
+                AgoVal arr_val = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                AgoVal fn_val = eval_expr(interp, node->as.call.args[1]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arr_val.kind != VAL_ARRAY || fn_val.kind != VAL_FN) {
+                    ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "map() requires (array, fn)");
+                    return val_nil();
+                }
+                AgoArrayVal *src = arr_val.as.array;
+                AgoArrayVal *dst = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
+                if (!dst) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+                dst->count = src->count;
+                dst->elements = src->count > 0 ? malloc(sizeof(AgoVal) * (size_t)src->count) : NULL;
+                for (int i = 0; i < src->count; i++) {
+                    AgoFnVal *fn_obj = fn_val.as.fn;
+                    AgoNode *decl = fn_obj->decl;
+                    if (decl->as.fn_decl.param_count != 1) {
+                        ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "map() function must take 1 parameter");
+                        return val_nil();
+                    }
+                    /* Save/restore env for closure */
+                    AgoEnv *saved_env_ptr = NULL;
+                    if (fn_obj->captured_count > 0) {
+                        saved_env_ptr = ago_arena_alloc(interp->arena, sizeof(AgoEnv));
+                        if (saved_env_ptr) {
+                            *saved_env_ptr = interp->env;
+                            env_init(&interp->env);
+                            for (int j = 0; j < fn_obj->captured_count; j++) {
+                                env_define(&interp->env, fn_obj->captured_names[j], fn_obj->captured_name_lengths[j], fn_obj->captured_values[j], fn_obj->captured_immutable[j]);
+                            }
+                        }
+                    }
+                    int pre_count = interp->env.count;
+                    env_define(&interp->env, decl->as.fn_decl.param_names[0], decl->as.fn_decl.param_name_lengths[0], src->elements[i], true);
+
+                    interp->has_return = false;
+                    interp->return_value = val_nil();
+                    bool prev_jmp = interp->return_jmp_set;
+                    jmp_buf pjmp; if (prev_jmp) memcpy(pjmp, interp->return_jmp, sizeof(jmp_buf));
+                    interp->return_jmp_set = true;
+                    if (setjmp(interp->return_jmp) == 0) {
+                        if (decl->as.fn_decl.body) exec_stmt(interp, decl->as.fn_decl.body);
+                    }
+                    dst->elements[i] = interp->return_value;
+                    interp->has_return = false;
+                    interp->return_jmp_set = prev_jmp;
+                    if (prev_jmp) memcpy(interp->return_jmp, pjmp, sizeof(jmp_buf));
+
+                    if (saved_env_ptr) interp->env = *saved_env_ptr;
+                    else interp->env.count = pre_count;
+                    if (ago_error_occurred(interp->ctx)) return val_nil();
+                }
+                AgoVal v; v.kind = VAL_ARRAY; v.as.array = dst;
+                return v;
+            }
+
+            /* Built-in filter(arr, fn) -> new array */
+            if (ago_str_eq(name, len, "filter", 6) && node->as.call.arg_count == 2) {
+                AgoVal arr_val = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                AgoVal fn_val = eval_expr(interp, node->as.call.args[1]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arr_val.kind != VAL_ARRAY || fn_val.kind != VAL_FN) {
+                    ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "filter() requires (array, fn)");
+                    return val_nil();
+                }
+                AgoArrayVal *src = arr_val.as.array;
+                AgoFnVal *fn_obj = fn_val.as.fn;
+                AgoNode *decl = fn_obj->decl;
+                if (decl->as.fn_decl.param_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "filter() function must take 1 parameter");
+                    return val_nil();
+                }
+                /* First pass: evaluate predicate for each element */
+                AgoVal temp[1024]; int kept = 0;
+                for (int i = 0; i < src->count && i < 1024; i++) {
+                    AgoEnv *saved_env_ptr = NULL;
+                    if (fn_obj->captured_count > 0) {
+                        saved_env_ptr = ago_arena_alloc(interp->arena, sizeof(AgoEnv));
+                        if (saved_env_ptr) {
+                            *saved_env_ptr = interp->env;
+                            env_init(&interp->env);
+                            for (int j = 0; j < fn_obj->captured_count; j++) {
+                                env_define(&interp->env, fn_obj->captured_names[j], fn_obj->captured_name_lengths[j], fn_obj->captured_values[j], fn_obj->captured_immutable[j]);
+                            }
+                        }
+                    }
+                    int pre_count = interp->env.count;
+                    env_define(&interp->env, decl->as.fn_decl.param_names[0], decl->as.fn_decl.param_name_lengths[0], src->elements[i], true);
+
+                    interp->has_return = false;
+                    interp->return_value = val_nil();
+                    bool prev_jmp = interp->return_jmp_set;
+                    jmp_buf pjmp; if (prev_jmp) memcpy(pjmp, interp->return_jmp, sizeof(jmp_buf));
+                    interp->return_jmp_set = true;
+                    if (setjmp(interp->return_jmp) == 0) {
+                        if (decl->as.fn_decl.body) exec_stmt(interp, decl->as.fn_decl.body);
+                    }
+                    AgoVal pred = interp->return_value;
+                    interp->has_return = false;
+                    interp->return_jmp_set = prev_jmp;
+                    if (prev_jmp) memcpy(interp->return_jmp, pjmp, sizeof(jmp_buf));
+
+                    if (saved_env_ptr) interp->env = *saved_env_ptr;
+                    else interp->env.count = pre_count;
+                    if (ago_error_occurred(interp->ctx)) return val_nil();
+
+                    if (is_truthy(pred)) temp[kept++] = src->elements[i];
+                }
+                AgoArrayVal *dst = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
+                if (!dst) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
+                dst->count = kept;
+                dst->elements = kept > 0 ? malloc(sizeof(AgoVal) * (size_t)kept) : NULL;
+                if (kept > 0) memcpy(dst->elements, temp, sizeof(AgoVal) * (size_t)kept);
+                AgoVal v; v.kind = VAL_ARRAY; v.as.array = dst;
+                return v;
+            }
+
+            /* Built-in abs(n) */
+            if (ago_str_eq(name, len, "abs", 3)) {
+                if (node->as.call.arg_count != 1) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "abs() takes exactly 1 argument");
+                    return val_nil();
+                }
+                AgoVal arg = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (arg.kind == VAL_INT) return val_int(arg.as.integer < 0 ? -arg.as.integer : arg.as.integer);
+                if (arg.kind == VAL_FLOAT) return val_float(arg.as.floating < 0 ? -arg.as.floating : arg.as.floating);
+                ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "abs() requires a number");
+                return val_nil();
+            }
+
+            /* Built-in min(a, b) */
+            if (ago_str_eq(name, len, "min", 3)) {
+                if (node->as.call.arg_count != 2) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "min() takes exactly 2 arguments");
+                    return val_nil();
+                }
+                AgoVal a = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                AgoVal b = eval_expr(interp, node->as.call.args[1]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (a.kind == VAL_INT && b.kind == VAL_INT) return a.as.integer <= b.as.integer ? a : b;
+                if (a.kind == VAL_FLOAT && b.kind == VAL_FLOAT) return a.as.floating <= b.as.floating ? a : b;
+                ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "min() requires two numbers of the same type");
+                return val_nil();
+            }
+
+            /* Built-in max(a, b) */
+            if (ago_str_eq(name, len, "max", 3)) {
+                if (node->as.call.arg_count != 2) {
+                    ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "max() takes exactly 2 arguments");
+                    return val_nil();
+                }
+                AgoVal a = eval_expr(interp, node->as.call.args[0]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                AgoVal b = eval_expr(interp, node->as.call.args[1]);
+                if (ago_error_occurred(interp->ctx)) return val_nil();
+                if (a.kind == VAL_INT && b.kind == VAL_INT) return a.as.integer >= b.as.integer ? a : b;
+                if (a.kind == VAL_FLOAT && b.kind == VAL_FLOAT) return a.as.floating >= b.as.floating ? a : b;
+                ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, node->line, node->column), "max() requires two numbers of the same type");
                 return val_nil();
             }
         }

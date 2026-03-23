@@ -1,0 +1,36 @@
+// Ago Standard Library Demo
+
+// String operations
+let greeting = "Hello" + " " + "World"
+print(greeting)
+print("hello" == "hello")
+print(len(greeting))
+
+// Type introspection
+print(type(42))
+print(type("hello"))
+print(type([1, 2]))
+print(type(fn() {}))
+
+// Conversions
+let n = int("123")
+print(n + 1)
+let f = float("2.5")
+print(f * 2.0)
+print(str(42) + " is a number")
+
+// Array functions
+let nums = [1, 2, 3, 4, 5]
+let doubled = map(nums, fn(x: int) -> int { return x * 2 })
+print(doubled)
+
+let evens = filter(nums, fn(x: int) -> bool { return x % 2 == 0 })
+print(evens)
+
+let extended = push(nums, 6)
+print(extended)
+
+// Math
+print(abs(-42))
+print(min(10, 3))
+print(max(10, 3))

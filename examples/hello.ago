@@ -1,1 +1,59 @@
-print("hello world")
+// Ago language demo
+
+fn fizzbuzz(n: int) {
+    var i = 1
+    while i <= n {
+        if i % 15 == 0 {
+            print("FizzBuzz")
+        } else if i % 3 == 0 {
+            print("Fizz")
+        } else if i % 5 == 0 {
+            print("Buzz")
+        } else {
+            print(i)
+        }
+        i = i + 1
+    }
+}
+
+fn safe_div(a: int, b: int) -> result {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+// FizzBuzz
+print("=== FizzBuzz ===")
+fizzbuzz(20)
+
+// Result handling
+print("=== Result ===")
+match safe_div(10, 3) {
+    ok(v) -> print(v)
+    err(e) -> print(e)
+}
+match safe_div(10, 0) {
+    ok(v) -> print(v)
+    err(e) -> print(e)
+}
+
+// Closures
+print("=== Closures ===")
+fn make_adder(n: int) -> fn {
+    return fn(x: int) -> int {
+        return x + n
+    }
+}
+let add10 = make_adder(10)
+print(add10(5))
+print(add10(20))
+
+// Arrays + for-in
+print("=== Arrays ===")
+let nums = [10, 20, 30, 40, 50]
+var sum = 0
+for n in nums {
+    sum = sum + n
+}
+print(sum)

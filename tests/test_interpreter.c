@@ -822,6 +822,142 @@ AGO_TEST(test_gc_result_survives) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
 }
 
+/* ---- Stdlib: String operations ---- */
+
+AGO_TEST(test_string_equality) {
+    int r = run_and_capture("print(\"hello\" == \"hello\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_string_inequality) {
+    int r = run_and_capture("print(\"hello\" != \"world\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_string_eq_false) {
+    int r = run_and_capture("print(\"hello\" == \"world\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "false\n");
+}
+
+AGO_TEST(test_string_concat) {
+    int r = run_and_capture("print(\"hello\" + \" world\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "hello world\n");
+}
+
+AGO_TEST(test_string_concat_multi) {
+    int r = run_and_capture("let s = \"a\" + \"b\" + \"c\"\nprint(s)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "abc\n");
+}
+
+AGO_TEST(test_string_len) {
+    int r = run_and_capture("print(len(\"hello\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "5\n");
+}
+
+/* ---- Stdlib: Type and conversion ---- */
+
+AGO_TEST(test_type_int) {
+    int r = run_and_capture("print(type(42))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "int\n");
+}
+
+AGO_TEST(test_type_string) {
+    int r = run_and_capture("print(type(\"hi\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "string\n");
+}
+
+AGO_TEST(test_type_array) {
+    int r = run_and_capture("print(type([1,2]))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "array\n");
+}
+
+AGO_TEST(test_type_fn) {
+    int r = run_and_capture("print(type(fn() {}))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "fn\n");
+}
+
+AGO_TEST(test_type_bool) {
+    int r = run_and_capture("print(type(true))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "bool\n");
+}
+
+AGO_TEST(test_str_int) {
+    int r = run_and_capture("let s = str(42)\nprint(s)\nprint(type(s))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\nstring\n");
+}
+
+AGO_TEST(test_str_bool) {
+    int r = run_and_capture("print(str(true))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_int_parse) {
+    int r = run_and_capture("let n = int(\"42\")\nprint(n + 1)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "43\n");
+}
+
+AGO_TEST(test_float_parse) {
+    int r = run_and_capture("let f = float(\"3.14\")\nprint(f)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "3.14\n");
+}
+
+/* ---- Stdlib: Array functions ---- */
+
+AGO_TEST(test_push) {
+    int r = run_and_capture(
+        "let a = [1, 2]\n"
+        "let b = push(a, 3)\n"
+        "print(a)\n"
+        "print(b)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[1, 2]\n[1, 2, 3]\n");
+}
+
+AGO_TEST(test_map) {
+    int r = run_and_capture(
+        "let a = map([1, 2, 3], fn(x: int) -> int { return x * 2 })\n"
+        "print(a)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[2, 4, 6]\n");
+}
+
+AGO_TEST(test_filter) {
+    int r = run_and_capture(
+        "let a = filter([1, 2, 3, 4, 5], fn(x: int) -> bool { return x > 3 })\n"
+        "print(a)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[4, 5]\n");
+}
+
+/* ---- Stdlib: Math ---- */
+
+AGO_TEST(test_abs) {
+    int r = run_and_capture("print(abs(-5))\nprint(abs(3))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "5\n3\n");
+}
+
+AGO_TEST(test_min_max) {
+    int r = run_and_capture("print(min(3, 7))\nprint(max(3, 7))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "3\n7\n");
+}
+
 /* ---- Import / Modules ---- */
 
 #define TEST_DIR "/tmp/ago_test"
@@ -996,6 +1132,34 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_gc_reachable_survives);
     AGO_RUN_TEST(&ctx, test_gc_closure_survives);
     AGO_RUN_TEST(&ctx, test_gc_result_survives);
+
+    /* Stdlib: String operations */
+    AGO_RUN_TEST(&ctx, test_string_equality);
+    AGO_RUN_TEST(&ctx, test_string_inequality);
+    AGO_RUN_TEST(&ctx, test_string_eq_false);
+    AGO_RUN_TEST(&ctx, test_string_concat);
+    AGO_RUN_TEST(&ctx, test_string_concat_multi);
+    AGO_RUN_TEST(&ctx, test_string_len);
+
+    /* Stdlib: Type and conversion */
+    AGO_RUN_TEST(&ctx, test_type_int);
+    AGO_RUN_TEST(&ctx, test_type_string);
+    AGO_RUN_TEST(&ctx, test_type_array);
+    AGO_RUN_TEST(&ctx, test_type_fn);
+    AGO_RUN_TEST(&ctx, test_type_bool);
+    AGO_RUN_TEST(&ctx, test_str_int);
+    AGO_RUN_TEST(&ctx, test_str_bool);
+    AGO_RUN_TEST(&ctx, test_int_parse);
+    AGO_RUN_TEST(&ctx, test_float_parse);
+
+    /* Stdlib: Array functions */
+    AGO_RUN_TEST(&ctx, test_push);
+    AGO_RUN_TEST(&ctx, test_map);
+    AGO_RUN_TEST(&ctx, test_filter);
+
+    /* Stdlib: Math */
+    AGO_RUN_TEST(&ctx, test_abs);
+    AGO_RUN_TEST(&ctx, test_min_max);
 
     /* Import / Modules */
     AGO_RUN_TEST(&ctx, test_import_function);

@@ -347,9 +347,19 @@ bool ago_sema_check(AgoSema *sema, AgoNode *program) {
     sema->scope = scope_new(sema, NULL);
     if (!sema->scope) return false;
 
-    /* Built-ins: print(variadic) and len(1 arg) */
-    scope_define(sema->scope, "print", 5, false, false, 0); /* variadic — skip arity check */
+    /* Built-in functions */
+    scope_define(sema->scope, "print", 5, false, false, 0); /* variadic */
     scope_define(sema->scope, "len", 3, false, true, 1);
+    scope_define(sema->scope, "type", 4, false, true, 1);
+    scope_define(sema->scope, "str", 3, false, true, 1);
+    scope_define(sema->scope, "int", 3, false, true, 1);
+    scope_define(sema->scope, "float", 5, false, true, 1);
+    scope_define(sema->scope, "push", 4, false, true, 2);
+    scope_define(sema->scope, "map", 3, false, true, 2);
+    scope_define(sema->scope, "filter", 6, false, true, 2);
+    scope_define(sema->scope, "abs", 3, false, true, 1);
+    scope_define(sema->scope, "min", 3, false, true, 2);
+    scope_define(sema->scope, "max", 3, false, true, 2);
 
     /* Check all top-level declarations/statements */
     for (int i = 0; i < program->as.program.decl_count; i++) {
