@@ -1,6 +1,7 @@
 #include "interpreter.h"
 #include "parser.h"
 #include "arena.h"
+#include "gc.h"
 #include <setjmp.h>
 
 /* ---- Runtime Value ---- */
@@ -38,25 +39,27 @@ typedef struct {
 } AgoVal;
 
 struct AgoFnVal {
+    AgoObj obj;     /* GC header */
     AgoNode *decl;
-    /* Closure: captured environment at definition time */
     int captured_count;
-    const char **captured_names;
-    int *captured_name_lengths;
-    AgoVal *captured_values;
-    bool *captured_immutable;
+    const char **captured_names;        /* malloc'd */
+    int *captured_name_lengths;         /* malloc'd */
+    AgoVal *captured_values;            /* malloc'd */
+    bool *captured_immutable;           /* malloc'd */
 };
 
 #define MAX_ARRAY_SIZE 1024
 
 struct AgoArrayVal {
-    AgoVal *elements;
+    AgoObj obj;     /* GC header */
+    AgoVal *elements;   /* malloc'd */
     int count;
 };
 
 #define MAX_STRUCT_FIELDS 64
 
 struct AgoStructVal {
+    AgoObj obj;     /* GC header */
     const char *type_name;
     int type_name_length;
     const char *field_names[MAX_STRUCT_FIELDS];
@@ -66,9 +69,25 @@ struct AgoStructVal {
 };
 
 struct AgoResultVal {
+    AgoObj obj;     /* GC header */
     bool is_ok;
     AgoVal value;
 };
+
+/* ---- Cleanup functions for GC ---- */
+
+static void array_cleanup(void *p) {
+    AgoArrayVal *arr = p;
+    free(arr->elements);
+}
+
+static void fn_cleanup(void *p) {
+    AgoFnVal *fn = p;
+    free(fn->captured_names);
+    free(fn->captured_name_lengths);
+    free(fn->captured_values);
+    free(fn->captured_immutable);
+}
 
 static AgoVal val_int(int64_t v)    { return (AgoVal){VAL_INT,    {.integer = v}}; }
 static AgoVal val_float(double v)   { return (AgoVal){VAL_FLOAT,  {.floating = v}}; }
@@ -135,7 +154,8 @@ static int env_assign(AgoEnv *env, const char *name, int length, AgoVal val) {
 typedef struct {
     AgoEnv env;
     AgoCtx *ctx;
-    AgoArena *arena;    /* runtime allocations (arrays, structs, fn vals) */
+    AgoArena *arena;    /* temporary allocations (saved_closure_env) */
+    AgoGc *gc;          /* GC-tracked runtime objects */
     /* Return mechanism */
     bool has_return;
     AgoVal return_value;
@@ -146,6 +166,51 @@ typedef struct {
 /* Forward declarations */
 static AgoVal eval_expr(AgoInterp *interp, AgoNode *node);
 static void exec_stmt(AgoInterp *interp, AgoNode *node);
+
+/* ---- GC: mark reachable values ---- */
+
+static void mark_val(AgoVal val) {
+    switch (val.kind) {
+    case VAL_ARRAY:
+        if (!val.as.array) break;
+        ago_gc_mark(&val.as.array->obj);
+        for (int i = 0; i < val.as.array->count; i++) {
+            mark_val(val.as.array->elements[i]);
+        }
+        break;
+    case VAL_STRUCT:
+        if (!val.as.strct) break;
+        ago_gc_mark(&val.as.strct->obj);
+        for (int i = 0; i < val.as.strct->field_count; i++) {
+            mark_val(val.as.strct->field_values[i]);
+        }
+        break;
+    case VAL_FN:
+        if (!val.as.fn) break;
+        ago_gc_mark(&val.as.fn->obj);
+        for (int i = 0; i < val.as.fn->captured_count; i++) {
+            mark_val(val.as.fn->captured_values[i]);
+        }
+        break;
+    case VAL_RESULT:
+        if (!val.as.result) break;
+        ago_gc_mark(&val.as.result->obj);
+        mark_val(val.as.result->value);
+        break;
+    default:
+        break;  /* scalars: no heap objects */
+    }
+}
+
+static void gc_collect(AgoInterp *interp) {
+    /* Mark all reachable values from environment */
+    for (int i = 0; i < interp->env.count; i++) {
+        mark_val(interp->env.values[i]);
+    }
+    mark_val(interp->return_value);
+    /* Sweep unreachable objects */
+    ago_gc_sweep(interp->gc);
+}
 
 /* ---- Truthiness ---- */
 
@@ -485,12 +550,12 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_ARRAY_LIT: {
-        AgoArrayVal *arr = ago_arena_alloc(interp->arena, sizeof(AgoArrayVal));
+        AgoArrayVal *arr = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
         if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
         arr->count = node->as.array_lit.count;
         arr->elements = NULL;
         if (arr->count > 0) {
-            arr->elements = ago_arena_alloc(interp->arena, sizeof(AgoVal) * (size_t)arr->count);
+            arr->elements = malloc(sizeof(AgoVal) * (size_t)arr->count);
             if (!arr->elements) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
         }
         for (int i = 0; i < arr->count; i++) {
@@ -531,7 +596,7 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_STRUCT_LIT: {
-        AgoStructVal *s = ago_arena_alloc(interp->arena, sizeof(AgoStructVal));
+        AgoStructVal *s = ago_gc_alloc(interp->gc, sizeof(AgoStructVal), NULL);
         if (!s) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return val_nil(); }
         s->type_name = node->as.struct_lit.name;
         s->type_name_length = node->as.struct_lit.name_length;
@@ -552,7 +617,7 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     case AGO_NODE_RESULT_ERR: {
         AgoVal inner = eval_expr(interp, node->as.result_val.value);
         if (ago_error_occurred(interp->ctx)) return val_nil();
-        AgoResultVal *rv = ago_arena_alloc(interp->arena, sizeof(AgoResultVal));
+        AgoResultVal *rv = ago_gc_alloc(interp->gc, sizeof(AgoResultVal), NULL);
         if (!rv) {
             ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
                           ago_loc(NULL, node->line, node->column), "out of memory");
@@ -602,8 +667,7 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_LAMBDA: {
-        /* Create a closure: capture current environment */
-        AgoFnVal *fn = ago_arena_alloc(interp->arena, sizeof(AgoFnVal));
+        AgoFnVal *fn = ago_gc_alloc(interp->gc, sizeof(AgoFnVal), fn_cleanup);
         if (!fn) {
             ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
                           ago_loc(NULL, node->line, node->column), "out of memory");
@@ -613,10 +677,10 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
         fn->captured_count = interp->env.count;
         if (fn->captured_count > 0) {
             size_t n_cap = (size_t)fn->captured_count;
-            fn->captured_names = ago_arena_alloc(interp->arena, sizeof(char *) * n_cap);
-            fn->captured_name_lengths = ago_arena_alloc(interp->arena, sizeof(int) * n_cap);
-            fn->captured_values = ago_arena_alloc(interp->arena, sizeof(AgoVal) * n_cap);
-            fn->captured_immutable = ago_arena_alloc(interp->arena, sizeof(bool) * n_cap);
+            fn->captured_names = malloc(sizeof(char *) * n_cap);
+            fn->captured_name_lengths = malloc(sizeof(int) * n_cap);
+            fn->captured_values = malloc(sizeof(AgoVal) * n_cap);
+            fn->captured_immutable = malloc(sizeof(bool) * n_cap);
             if (!fn->captured_names || !fn->captured_name_lengths ||
                 !fn->captured_values || !fn->captured_immutable) {
                 ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
@@ -709,6 +773,11 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
 
 static void exec_stmt(AgoInterp *interp, AgoNode *node) {
     if (!node || ago_error_occurred(interp->ctx)) return;
+
+    /* GC: collect at statement boundaries when threshold exceeded */
+    if (ago_gc_should_collect(interp->gc)) {
+        gc_collect(interp);
+    }
 
     switch (node->kind) {
     case AGO_NODE_EXPR_STMT:
@@ -824,7 +893,7 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
 
     case AGO_NODE_FN_DECL: {
         /* Register function in environment */
-        AgoFnVal *fn = ago_arena_alloc(interp->arena, sizeof(AgoFnVal));
+        AgoFnVal *fn = ago_gc_alloc(interp->gc, sizeof(AgoFnVal), fn_cleanup);
         if (!fn) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return; }
         fn->decl = node;
         fn->captured_count = 0;
@@ -865,14 +934,17 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
 int ago_interpret(AgoNode *program, AgoCtx *ctx) {
     if (!program || program->kind != AGO_NODE_PROGRAM) return -1;
 
-    /* Create a runtime arena for interpreter allocations */
     AgoArena *runtime_arena = ago_arena_new();
     if (!runtime_arena) return -1;
+
+    AgoGc *gc = ago_gc_new();
+    if (!gc) { ago_arena_free(runtime_arena); return -1; }
 
     AgoInterp interp;
     env_init(&interp.env);
     interp.ctx = ctx;
     interp.arena = runtime_arena;
+    interp.gc = gc;
     interp.has_return = false;
     interp.return_value = val_nil();
     interp.return_jmp_set = false;
@@ -880,11 +952,13 @@ int ago_interpret(AgoNode *program, AgoCtx *ctx) {
     for (int i = 0; i < program->as.program.decl_count; i++) {
         exec_stmt(&interp, program->as.program.decls[i]);
         if (ago_error_occurred(ctx)) {
+            ago_gc_free(gc);
             ago_arena_free(runtime_arena);
             return -1;
         }
     }
 
+    ago_gc_free(gc);
     ago_arena_free(runtime_arena);
     return 0;
 }

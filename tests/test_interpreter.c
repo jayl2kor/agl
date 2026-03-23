@@ -705,6 +705,73 @@ AGO_TEST(test_err_match_duplicate_arm) {
     AGO_ASSERT(ctx, r != 0);
 }
 
+/* ---- GC integration ---- */
+
+AGO_TEST(test_gc_loop_temp_arrays) {
+    /* Loop creating many temporary arrays — GC should collect them */
+    int r = run_and_capture(
+        "var i = 0\n"
+        "var arr = [0]\n"
+        "while i < 200 {\n"
+        "    arr = [1, 2, 3, 4, 5]\n"
+        "    i = i + 1\n"
+        "}\n"
+        "print(\"done\")");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "done\n");
+}
+
+AGO_TEST(test_gc_reachable_survives) {
+    /* Long-lived array must survive GC cycles triggered by temp objects */
+    int r = run_and_capture(
+        "let keeper = [10, 20, 30]\n"
+        "var i = 0\n"
+        "var temp = [0]\n"
+        "while i < 200 {\n"
+        "    temp = [i, i + 1]\n"
+        "    i = i + 1\n"
+        "}\n"
+        "print(keeper[1])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "20\n");
+}
+
+AGO_TEST(test_gc_closure_survives) {
+    /* Closure captured values must survive GC */
+    int r = run_and_capture(
+        "fn make_adder(n: int) -> fn {\n"
+        "    return fn(x: int) -> int { return x + n }\n"
+        "}\n"
+        "let add5 = make_adder(5)\n"
+        "var i = 0\n"
+        "var temp = [0]\n"
+        "while i < 200 {\n"
+        "    temp = [1, 2, 3]\n"
+        "    i = i + 1\n"
+        "}\n"
+        "print(add5(10))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "15\n");
+}
+
+AGO_TEST(test_gc_result_survives) {
+    /* Result values must survive GC */
+    int r = run_and_capture(
+        "let r = ok(42)\n"
+        "var i = 0\n"
+        "var temp = [0]\n"
+        "while i < 200 {\n"
+        "    temp = [i]\n"
+        "    i = i + 1\n"
+        "}\n"
+        "match r {\n"
+        "    ok(v) -> print(v)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -809,6 +876,12 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_result_chaining);
     AGO_RUN_TEST(&ctx, test_err_match_non_result);
     AGO_RUN_TEST(&ctx, test_err_match_duplicate_arm);
+
+    /* GC integration */
+    AGO_RUN_TEST(&ctx, test_gc_loop_temp_arrays);
+    AGO_RUN_TEST(&ctx, test_gc_reachable_survives);
+    AGO_RUN_TEST(&ctx, test_gc_closure_survives);
+    AGO_RUN_TEST(&ctx, test_gc_result_survives);
 
     AGO_SUMMARY(&ctx);
 }
