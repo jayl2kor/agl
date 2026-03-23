@@ -1,5 +1,6 @@
 #include "interpreter.h"
 #include "parser.h"
+#include "sema.h"
 #include "arena.h"
 #include "gc.h"
 #include <setjmp.h>
@@ -973,7 +974,16 @@ int ago_run(const char *source, const char *filename, AgoCtx *ctx) {
 
     int result = -1;
     if (program && !ago_error_occurred(ctx)) {
-        result = ago_interpret(program, ctx);
+        /* Semantic analysis: name resolution, immutability, arity */
+        AgoSema *sema = ago_sema_new(ctx, arena);
+        if (sema) {
+            ago_sema_check(sema, program);
+            ago_sema_free(sema);
+        }
+        /* Interpret only if sema passed */
+        if (!ago_error_occurred(ctx)) {
+            result = ago_interpret(program, ctx);
+        }
     }
 
     ago_arena_free(arena);
