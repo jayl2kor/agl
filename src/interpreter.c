@@ -13,12 +13,15 @@ typedef enum {
     VAL_FN,
     VAL_ARRAY,
     VAL_STRUCT,
+    VAL_RESULT,
     VAL_NIL,
 } AgoValKind;
 
 typedef struct AgoFnVal AgoFnVal;
 typedef struct AgoArrayVal AgoArrayVal;
 typedef struct AgoStructVal AgoStructVal;
+
+typedef struct AgoResultVal AgoResultVal;
 
 typedef struct {
     AgoValKind kind;
@@ -30,6 +33,7 @@ typedef struct {
         AgoFnVal *fn;
         AgoArrayVal *array;
         AgoStructVal *strct;
+        AgoResultVal *result;
     } as;
 } AgoVal;
 
@@ -59,6 +63,11 @@ struct AgoStructVal {
     int field_name_lengths[MAX_STRUCT_FIELDS];
     AgoVal field_values[MAX_STRUCT_FIELDS];
     int field_count;
+};
+
+struct AgoResultVal {
+    bool is_ok;
+    AgoVal value;
 };
 
 static AgoVal val_int(int64_t v)    { return (AgoVal){VAL_INT,    {.integer = v}}; }
@@ -150,6 +159,7 @@ static bool is_truthy(AgoVal val) {
     case VAL_FN:     return true;
     case VAL_ARRAY:  return val.as.array->count > 0;
     case VAL_STRUCT: return true;
+    case VAL_RESULT: return val.as.result->is_ok;
     }
     return false;
 }
@@ -202,6 +212,27 @@ static void builtin_print(AgoVal val) {
     case VAL_STRUCT:
         printf("<struct %.*s>\n", val.as.strct->type_name_length, val.as.strct->type_name);
         break;
+    case VAL_RESULT: {
+        AgoResultVal *rv = val.as.result;
+        printf("%s(", rv->is_ok ? "ok" : "err");
+        /* Print inner value without trailing newline */
+        AgoVal inner = rv->value;
+        switch (inner.kind) {
+        case VAL_INT:    printf("%lld", (long long)inner.as.integer); break;
+        case VAL_FLOAT:  printf("%g", inner.as.floating); break;
+        case VAL_BOOL:   printf("%s", inner.as.boolean ? "true" : "false"); break;
+        case VAL_STRING:
+            if (inner.as.string.length >= 2 && inner.as.string.data[0] == '"')
+                printf("%.*s", inner.as.string.length - 2, inner.as.string.data + 1);
+            else
+                printf("%.*s", inner.as.string.length, inner.as.string.data);
+            break;
+        case VAL_NIL:    printf("nil"); break;
+        default:         printf("..."); break;
+        }
+        printf(")\n");
+        break;
+    }
     }
 }
 
@@ -523,6 +554,53 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
         v.kind = VAL_STRUCT;
         v.as.strct = s;
         return v;
+    }
+
+    case AGO_NODE_RESULT_OK:
+    case AGO_NODE_RESULT_ERR: {
+        AgoVal inner = eval_expr(interp, node->as.result_val.value);
+        if (ago_error_occurred(interp->ctx)) return val_nil();
+        AgoResultVal *rv = ago_arena_alloc(interp->arena, sizeof(AgoResultVal));
+        if (!rv) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, node->line, node->column), "out of memory");
+            return val_nil();
+        }
+        rv->is_ok = (node->kind == AGO_NODE_RESULT_OK);
+        rv->value = inner;
+        AgoVal v;
+        v.kind = VAL_RESULT;
+        v.as.result = rv;
+        return v;
+    }
+
+    case AGO_NODE_MATCH_EXPR: {
+        AgoVal subject = eval_expr(interp, node->as.match_expr.subject);
+        if (ago_error_occurred(interp->ctx)) return val_nil();
+        if (subject.kind != VAL_RESULT) {
+            ago_error_set(interp->ctx, AGO_ERR_TYPE,
+                          ago_loc(NULL, node->line, node->column),
+                          "match requires a result value");
+            return val_nil();
+        }
+        AgoResultVal *rv = subject.as.result;
+        int saved_count = interp->env.count;
+        AgoVal result;
+        if (rv->is_ok) {
+            env_define(&interp->env,
+                       node->as.match_expr.ok_name,
+                       node->as.match_expr.ok_name_length,
+                       rv->value, true);
+            result = eval_expr(interp, node->as.match_expr.ok_body);
+        } else {
+            env_define(&interp->env,
+                       node->as.match_expr.err_name,
+                       node->as.match_expr.err_name_length,
+                       rv->value, true);
+            result = eval_expr(interp, node->as.match_expr.err_body);
+        }
+        interp->env.count = saved_count;
+        return result;
     }
 
     case AGO_NODE_LAMBDA: {

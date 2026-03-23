@@ -586,6 +586,116 @@ AGO_TEST(test_err_call_non_function) {
     AGO_ASSERT(ctx, r != 0);
 }
 
+/* ---- Result + Match ---- */
+
+AGO_TEST(test_match_ok) {
+    int r = run_and_capture(
+        "let result = ok(42)\n"
+        "match result {\n"
+        "    ok(x) -> print(x)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
+}
+
+AGO_TEST(test_match_err) {
+    int r = run_and_capture(
+        "let result = err(\"bad\")\n"
+        "match result {\n"
+        "    ok(x) -> print(x)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "bad\n");
+}
+
+AGO_TEST(test_match_as_expression) {
+    int r = run_and_capture(
+        "let val = match ok(10) {\n"
+        "    ok(x) -> x + 1\n"
+        "    err(e) -> 0\n"
+        "}\n"
+        "print(val)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "11\n");
+}
+
+AGO_TEST(test_match_err_as_expression) {
+    int r = run_and_capture(
+        "let val = match err(\"x\") {\n"
+        "    ok(x) -> 1\n"
+        "    err(e) -> -1\n"
+        "}\n"
+        "print(val)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "-1\n");
+}
+
+AGO_TEST(test_result_from_function) {
+    int r = run_and_capture(
+        "fn safe_div(a: int, b: int) -> result {\n"
+        "    if b == 0 {\n"
+        "        return err(\"division by zero\")\n"
+        "    }\n"
+        "    return ok(a / b)\n"
+        "}\n"
+        "match safe_div(10, 2) {\n"
+        "    ok(v) -> print(v)\n"
+        "    err(e) -> print(e)\n"
+        "}\n"
+        "match safe_div(10, 0) {\n"
+        "    ok(v) -> print(v)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "5\ndivision by zero\n");
+}
+
+AGO_TEST(test_print_result) {
+    int r = run_and_capture(
+        "print(ok(42))\n"
+        "print(err(\"bad\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "ok(42)\nerr(bad)\n");
+}
+
+AGO_TEST(test_result_chaining) {
+    int r = run_and_capture(
+        "fn safe_sqrt(n: int) -> result {\n"
+        "    if n < 0 {\n"
+        "        return err(\"negative\")\n"
+        "    }\n"
+        "    return ok(n)\n"
+        "}\n"
+        "fn double_safe(n: int) -> result {\n"
+        "    let r = safe_sqrt(n)\n"
+        "    return match r {\n"
+        "        ok(v) -> ok(v * 2)\n"
+        "        err(e) -> err(e)\n"
+        "    }\n"
+        "}\n"
+        "match double_safe(5) {\n"
+        "    ok(v) -> print(v)\n"
+        "    err(e) -> print(e)\n"
+        "}\n"
+        "match double_safe(-1) {\n"
+        "    ok(v) -> print(v)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "10\nnegative\n");
+}
+
+AGO_TEST(test_err_match_non_result) {
+    int r = run_and_capture(
+        "match 42 {\n"
+        "    ok(x) -> print(x)\n"
+        "    err(e) -> print(e)\n"
+        "}");
+    AGO_ASSERT(ctx, r != 0);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -679,6 +789,16 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_lambda_inline_call);
     AGO_RUN_TEST(&ctx, test_lambda_as_value);
     AGO_RUN_TEST(&ctx, test_err_call_non_function);
+
+    /* Result + Match */
+    AGO_RUN_TEST(&ctx, test_match_ok);
+    AGO_RUN_TEST(&ctx, test_match_err);
+    AGO_RUN_TEST(&ctx, test_match_as_expression);
+    AGO_RUN_TEST(&ctx, test_match_err_as_expression);
+    AGO_RUN_TEST(&ctx, test_result_from_function);
+    AGO_RUN_TEST(&ctx, test_print_result);
+    AGO_RUN_TEST(&ctx, test_result_chaining);
+    AGO_RUN_TEST(&ctx, test_err_match_non_result);
 
     AGO_SUMMARY(&ctx);
 }

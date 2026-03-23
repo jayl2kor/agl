@@ -230,6 +230,78 @@ static AgoNode *parse_lambda(AgoParser *p) {
     return n;
 }
 
+/* Parse ok(expr) or err(expr) */
+static AgoNode *parse_result_wrap(AgoParser *p, AgoNodeKind kind) {
+    AgoNode *n = node_new(p, kind);
+    if (!n) return NULL;
+    parser_expect(p, AGO_TOKEN_LPAREN, kind == AGO_NODE_RESULT_OK
+                  ? "expected '(' after 'ok'" : "expected '(' after 'err'");
+    if (ago_error_occurred(p->ctx)) return NULL;
+    n->as.result_val.value = parse_expression(p, PREC_NONE);
+    if (ago_error_occurred(p->ctx)) return NULL;
+    parser_expect(p, AGO_TOKEN_RPAREN, "expected ')'");
+    return n;
+}
+
+/* Parse match expression: match expr { ok(n) -> expr \n err(n) -> expr } */
+static AgoNode *parse_match_expression(AgoParser *p) {
+    AgoNode *n = node_new(p, AGO_NODE_MATCH_EXPR);
+    if (!n) return NULL;
+
+    n->as.match_expr.subject = parse_expression(p, PREC_NONE);
+    if (ago_error_occurred(p->ctx)) return NULL;
+
+    skip_newlines(p);
+    parser_expect(p, AGO_TOKEN_LBRACE, "expected '{' after match expression");
+    if (ago_error_occurred(p->ctx)) return NULL;
+
+    n->as.match_expr.ok_name = NULL;
+    n->as.match_expr.ok_body = NULL;
+    n->as.match_expr.err_name = NULL;
+    n->as.match_expr.err_body = NULL;
+
+    /* Parse two arms: ok and err (in any order) */
+    for (int arm = 0; arm < 2; arm++) {
+        skip_newlines(p);
+        if (parser_match(p, AGO_TOKEN_OK)) {
+            parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after 'ok'");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            parser_expect(p, AGO_TOKEN_IDENT, "expected binding name");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            n->as.match_expr.ok_name = p->previous.start;
+            n->as.match_expr.ok_name_length = p->previous.length;
+            parser_expect(p, AGO_TOKEN_RPAREN, "expected ')'");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            parser_expect(p, AGO_TOKEN_ARROW, "expected '->' after pattern");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            n->as.match_expr.ok_body = parse_expression(p, PREC_NONE);
+            if (ago_error_occurred(p->ctx)) return NULL;
+        } else if (parser_match(p, AGO_TOKEN_ERR)) {
+            parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after 'err'");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            parser_expect(p, AGO_TOKEN_IDENT, "expected binding name");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            n->as.match_expr.err_name = p->previous.start;
+            n->as.match_expr.err_name_length = p->previous.length;
+            parser_expect(p, AGO_TOKEN_RPAREN, "expected ')'");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            parser_expect(p, AGO_TOKEN_ARROW, "expected '->' after pattern");
+            if (ago_error_occurred(p->ctx)) return NULL;
+            n->as.match_expr.err_body = parse_expression(p, PREC_NONE);
+            if (ago_error_occurred(p->ctx)) return NULL;
+        } else {
+            ago_error_set(p->ctx, AGO_ERR_SYNTAX,
+                          ago_loc(p->lexer.file, p->current.line, p->current.column),
+                          "expected 'ok' or 'err' arm in match");
+            return NULL;
+        }
+        skip_newlines(p);
+    }
+
+    parser_expect(p, AGO_TOKEN_RBRACE, "expected '}' after match arms");
+    return n;
+}
+
 /* Parse prefix expression */
 static AgoNode *parse_prefix(AgoParser *p) {
     if (ago_error_occurred(p->ctx)) return NULL;
@@ -320,6 +392,9 @@ static AgoNode *parse_prefix(AgoParser *p) {
         return n;
     }
     case AGO_TOKEN_FN:      return parse_lambda(p);
+    case AGO_TOKEN_OK:      return parse_result_wrap(p, AGO_NODE_RESULT_OK);
+    case AGO_TOKEN_ERR:     return parse_result_wrap(p, AGO_NODE_RESULT_ERR);
+    case AGO_TOKEN_MATCH:   return parse_match_expression(p);
     case AGO_TOKEN_LPAREN:  return parse_grouped(p);
     case AGO_TOKEN_NOT:     return parse_unary(p, AGO_TOKEN_NOT);
     case AGO_TOKEN_MINUS:   return parse_unary(p, AGO_TOKEN_MINUS);

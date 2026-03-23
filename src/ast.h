@@ -19,6 +19,9 @@ typedef enum {
     AGO_NODE_ARRAY_LIT,     /* [1, 2, 3] */
     AGO_NODE_STRUCT_LIT,    /* Point { x: 1, y: 2 } */
     AGO_NODE_LAMBDA,        /* fn(x: int) -> int { ... } (anonymous function) */
+    AGO_NODE_RESULT_OK,     /* ok(expr) */
+    AGO_NODE_RESULT_ERR,    /* err(expr) */
+    AGO_NODE_MATCH_EXPR,    /* match expr { ok(n) -> expr, err(n) -> expr } */
 
     /* Statements */
     AGO_NODE_EXPR_STMT,     /* expression as statement */
@@ -93,6 +96,20 @@ struct AgoNode {
             AgoNode **field_values;
             int field_count;
         } struct_lit;
+
+        /* AGO_NODE_RESULT_OK / AGO_NODE_RESULT_ERR */
+        struct { AgoNode *value; } result_val;
+
+        /* AGO_NODE_MATCH_EXPR */
+        struct {
+            AgoNode *subject;
+            const char *ok_name;
+            int ok_name_length;
+            AgoNode *ok_body;
+            const char *err_name;
+            int err_name_length;
+            AgoNode *err_body;
+        } match_expr;
 
         /* AGO_NODE_ASSIGN_STMT */
         struct {
