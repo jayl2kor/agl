@@ -35,6 +35,12 @@ typedef struct {
 
 struct AgoFnVal {
     AgoNode *decl;
+    /* Closure: captured environment at definition time */
+    int captured_count;
+    const char **captured_names;
+    int *captured_name_lengths;
+    AgoVal *captured_values;
+    bool *captured_immutable;
 };
 
 #define MAX_ARRAY_SIZE 1024
@@ -221,6 +227,22 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
     }
 
     /* Save env state for restoration after call */
+    AgoEnv saved_env;
+    bool is_closure = (fn->captured_count > 0);
+
+    if (is_closure) {
+        /* Closure: save entire env, replace with captured env */
+        saved_env = interp->env;
+        env_init(&interp->env);
+        for (int i = 0; i < fn->captured_count; i++) {
+            env_define(&interp->env,
+                       fn->captured_names[i],
+                       fn->captured_name_lengths[i],
+                       fn->captured_values[i],
+                       fn->captured_immutable[i]);
+        }
+    }
+
     int saved_count = interp->env.count;
 
     /* Bind parameters */
@@ -232,7 +254,8 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
             ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
                           ago_loc(NULL, call_node->line, call_node->column),
                           "too many variables (max %d)", MAX_VARS);
-            interp->env.count = saved_count;
+            if (is_closure) interp->env = saved_env;
+            else interp->env.count = saved_count;
             return val_nil();
         }
     }
@@ -262,7 +285,11 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
     if (prev_jmp_set) memcpy(interp->return_jmp, prev_jmp, sizeof(jmp_buf));
 
     /* Restore env */
-    interp->env.count = saved_count;
+    if (is_closure) {
+        interp->env = saved_env;
+    } else {
+        interp->env.count = saved_count;
+    }
 
     return result;
 }
@@ -498,7 +525,40 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
         return v;
     }
 
+    case AGO_NODE_LAMBDA: {
+        /* Create a closure: capture current environment */
+        AgoFnVal *fn = ago_arena_alloc(interp->arena, sizeof(AgoFnVal));
+        if (!fn) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, node->line, node->column), "out of memory");
+            return val_nil();
+        }
+        fn->decl = node;
+        fn->captured_count = interp->env.count;
+        if (fn->captured_count > 0) {
+            size_t n_cap = (size_t)fn->captured_count;
+            fn->captured_names = ago_arena_alloc(interp->arena, sizeof(char *) * n_cap);
+            fn->captured_name_lengths = ago_arena_alloc(interp->arena, sizeof(int) * n_cap);
+            fn->captured_values = ago_arena_alloc(interp->arena, sizeof(AgoVal) * n_cap);
+            fn->captured_immutable = ago_arena_alloc(interp->arena, sizeof(bool) * n_cap);
+            memcpy(fn->captured_names, interp->env.names, sizeof(char *) * n_cap);
+            memcpy(fn->captured_name_lengths, interp->env.name_lengths, sizeof(int) * n_cap);
+            memcpy(fn->captured_values, interp->env.values, sizeof(AgoVal) * n_cap);
+            memcpy(fn->captured_immutable, interp->env.immutable, sizeof(bool) * n_cap);
+        } else {
+            fn->captured_names = NULL;
+            fn->captured_name_lengths = NULL;
+            fn->captured_values = NULL;
+            fn->captured_immutable = NULL;
+        }
+        AgoVal fn_val;
+        fn_val.kind = VAL_FN;
+        fn_val.as.fn = fn;
+        return fn_val;
+    }
+
     case AGO_NODE_CALL: {
+        /* Check built-in functions by name first */
         if (node->as.call.callee->kind == AGO_NODE_IDENT) {
             const char *name = node->as.call.callee->as.ident.name;
             int len = node->as.call.callee->as.ident.length;
@@ -530,13 +590,17 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
                               "len() requires an array or string");
                 return val_nil();
             }
-
-            /* User-defined function */
-            AgoVal *fn_val = env_get(&interp->env, name, len);
-            if (fn_val && fn_val->kind == VAL_FN) {
-                return call_user_fn(interp, fn_val->as.fn, node);
-            }
         }
+
+        /* Evaluate callee as expression (handles variables, lambdas, etc.) */
+        AgoVal callee = eval_expr(interp, node->as.call.callee);
+        if (ago_error_occurred(interp->ctx)) return val_nil();
+
+        if (callee.kind == VAL_FN) {
+            return call_user_fn(interp, callee.as.fn, node);
+        }
+
+        /* Not callable */
         if (node->as.call.callee->kind == AGO_NODE_IDENT) {
             ago_error_set(interp->ctx, AGO_ERR_NAME,
                           ago_loc(NULL, node->line, node->column),
@@ -681,6 +745,11 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
         AgoFnVal *fn = ago_arena_alloc(interp->arena, sizeof(AgoFnVal));
         if (!fn) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, node->line, node->column), "out of memory"); return; }
         fn->decl = node;
+        fn->captured_count = 0;
+        fn->captured_names = NULL;
+        fn->captured_name_lengths = NULL;
+        fn->captured_values = NULL;
+        fn->captured_immutable = NULL;
         AgoVal fn_val;
         fn_val.kind = VAL_FN;
         fn_val.as.fn = fn;

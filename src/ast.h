@@ -18,6 +18,7 @@ typedef enum {
     AGO_NODE_INDEX,         /* arr[0] */
     AGO_NODE_ARRAY_LIT,     /* [1, 2, 3] */
     AGO_NODE_STRUCT_LIT,    /* Point { x: 1, y: 2 } */
+    AGO_NODE_LAMBDA,        /* fn(x: int) -> int { ... } (anonymous function) */
 
     /* Statements */
     AGO_NODE_EXPR_STMT,     /* expression as statement */

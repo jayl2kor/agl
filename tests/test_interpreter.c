@@ -498,6 +498,94 @@ AGO_TEST(test_else_if_chain) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "two\n");
 }
 
+/* ---- Lambda / Closures ---- */
+
+AGO_TEST(test_lambda_basic) {
+    int r = run_and_capture(
+        "let double = fn(x: int) -> int {\n"
+        "    return x * 2\n"
+        "}\n"
+        "print(double(5))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "10\n");
+}
+
+AGO_TEST(test_lambda_no_params) {
+    int r = run_and_capture(
+        "let greet = fn() {\n"
+        "    print(\"hello\")\n"
+        "}\n"
+        "greet()");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "hello\n");
+}
+
+AGO_TEST(test_lambda_higher_order) {
+    int r = run_and_capture(
+        "fn apply(f: fn, x: int) -> int {\n"
+        "    return f(x)\n"
+        "}\n"
+        "let sq = fn(n: int) -> int { return n * n }\n"
+        "print(apply(sq, 4))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "16\n");
+}
+
+AGO_TEST(test_lambda_closure) {
+    int r = run_and_capture(
+        "fn make_adder(n: int) -> fn {\n"
+        "    return fn(x: int) -> int {\n"
+        "        return x + n\n"
+        "    }\n"
+        "}\n"
+        "let add5 = make_adder(5)\n"
+        "print(add5(10))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "15\n");
+}
+
+AGO_TEST(test_lambda_closure_multiple) {
+    int r = run_and_capture(
+        "fn make_adder(n: int) -> fn {\n"
+        "    return fn(x: int) -> int {\n"
+        "        return x + n\n"
+        "    }\n"
+        "}\n"
+        "let add3 = make_adder(3)\n"
+        "let add10 = make_adder(10)\n"
+        "print(add3(1))\n"
+        "print(add10(1))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "4\n11\n");
+}
+
+AGO_TEST(test_lambda_inline_call) {
+    /* Pass lambda directly as argument */
+    int r = run_and_capture(
+        "fn apply(f: fn, x: int) -> int {\n"
+        "    return f(x)\n"
+        "}\n"
+        "print(apply(fn(n: int) -> int { return n + 1 }, 9))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "10\n");
+}
+
+AGO_TEST(test_lambda_as_value) {
+    /* Lambda is truthy, prints as <fn> */
+    int r = run_and_capture(
+        "let f = fn() { }\n"
+        "print(f)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "<fn>\n");
+}
+
+AGO_TEST(test_err_call_non_function) {
+    int r = run_and_capture(
+        "let x = 42\n"
+        "x(1)");
+    AGO_ASSERT(ctx, r != 0);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -581,6 +669,16 @@ int main(void) {
 
     /* Else-if */
     AGO_RUN_TEST(&ctx, test_else_if_chain);
+
+    /* Lambda / Closures */
+    AGO_RUN_TEST(&ctx, test_lambda_basic);
+    AGO_RUN_TEST(&ctx, test_lambda_no_params);
+    AGO_RUN_TEST(&ctx, test_lambda_higher_order);
+    AGO_RUN_TEST(&ctx, test_lambda_closure);
+    AGO_RUN_TEST(&ctx, test_lambda_closure_multiple);
+    AGO_RUN_TEST(&ctx, test_lambda_inline_call);
+    AGO_RUN_TEST(&ctx, test_lambda_as_value);
+    AGO_RUN_TEST(&ctx, test_err_call_non_function);
 
     AGO_SUMMARY(&ctx);
 }
