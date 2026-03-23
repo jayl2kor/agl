@@ -1037,6 +1037,96 @@ AGO_TEST(test_import_dotdot) {
     AGO_ASSERT(ctx, r != 0);
 }
 
+/* ---- REPL ---- */
+
+static int repl_exec_capture(AgoRepl *repl, const char *source) {
+    fflush(stdout);
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+    int saved_stdout = dup(STDOUT_FILENO);
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+
+    int result = ago_repl_exec(repl, source);
+
+    fflush(stdout);
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+    ssize_t n = read(pipefd[0], captured_output, MAX_OUTPUT - 1);
+    close(pipefd[0]);
+    if (n < 0) n = 0;
+    captured_output[n] = '\0';
+    return result;
+}
+
+AGO_TEST(test_repl_basic) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    int r = repl_exec_capture(repl, "print(42)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
+    ago_repl_free(repl);
+}
+
+AGO_TEST(test_repl_persistent_var) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    repl_exec_capture(repl, "let x = 10");
+    int r = repl_exec_capture(repl, "print(x + 5)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "15\n");
+    ago_repl_free(repl);
+}
+
+AGO_TEST(test_repl_persistent_fn) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    repl_exec_capture(repl, "fn double(x: int) -> int { return x * 2 }");
+    int r = repl_exec_capture(repl, "print(double(7))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "14\n");
+    ago_repl_free(repl);
+}
+
+AGO_TEST(test_repl_error_recovery) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    repl_exec_capture(repl, "let x = 5");
+    /* This should error but not crash the REPL */
+    int r1 = repl_exec_capture(repl, "print(undefined_var)");
+    AGO_ASSERT(ctx, r1 != 0);
+    /* REPL should still work after error */
+    int r2 = repl_exec_capture(repl, "print(x)");
+    AGO_ASSERT_INT_EQ(ctx, r2, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "5\n");
+    ago_repl_free(repl);
+}
+
+AGO_TEST(test_repl_multiline) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    int r = repl_exec_capture(repl,
+        "fn add(a: int, b: int) -> int {\n"
+        "    return a + b\n"
+        "}\n"
+        "print(add(3, 4))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "7\n");
+    ago_repl_free(repl);
+}
+
+AGO_TEST(test_repl_var_reassign) {
+    AgoRepl *repl = ago_repl_new();
+    AGO_ASSERT_FATAL(ctx, repl != NULL);
+    repl_exec_capture(repl, "var count = 0");
+    repl_exec_capture(repl, "count = count + 1");
+    repl_exec_capture(repl, "count = count + 1");
+    int r = repl_exec_capture(repl, "print(count)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "2\n");
+    ago_repl_free(repl);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -1184,6 +1274,14 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_import_not_found);
     AGO_RUN_TEST(&ctx, test_import_path_traversal);
     AGO_RUN_TEST(&ctx, test_import_dotdot);
+
+    /* REPL */
+    AGO_RUN_TEST(&ctx, test_repl_basic);
+    AGO_RUN_TEST(&ctx, test_repl_persistent_var);
+    AGO_RUN_TEST(&ctx, test_repl_persistent_fn);
+    AGO_RUN_TEST(&ctx, test_repl_error_recovery);
+    AGO_RUN_TEST(&ctx, test_repl_multiline);
+    AGO_RUN_TEST(&ctx, test_repl_var_reassign);
 
     AGO_SUMMARY(&ctx);
 }
