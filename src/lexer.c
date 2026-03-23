@@ -163,6 +163,7 @@ static const AgoKeyword keywords[] = {
     {"fn",       2, AGO_TOKEN_FN},
     {"for",      3, AGO_TOKEN_FOR},
     {"if",       2, AGO_TOKEN_IF},
+    {"import",   6, AGO_TOKEN_IMPORT},
     {"in",       2, AGO_TOKEN_IN},
     {"let",      3, AGO_TOKEN_LET},
     {"match",    5, AGO_TOKEN_MATCH},
@@ -337,6 +338,7 @@ const char *ago_token_kind_name(AgoTokenKind kind) {
     case AGO_TOKEN_FOR:       return "for";
     case AGO_TOKEN_IN:        return "in";
     case AGO_TOKEN_STRUCT:    return "struct";
+    case AGO_TOKEN_IMPORT:    return "import";
     case AGO_TOKEN_MATCH:     return "match";
     case AGO_TOKEN_OK:        return "ok";
     case AGO_TOKEN_ERR:       return "err";

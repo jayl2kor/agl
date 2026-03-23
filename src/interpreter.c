@@ -152,11 +152,23 @@ static int env_assign(AgoEnv *env, const char *name, int length, AgoVal val) {
 
 /* ---- Interpreter state ---- */
 
+#define MAX_MODULES 64
+
+typedef struct {
+    char *path;
+    char *source;       /* malloc'd source text — AST tokens point into this */
+    AgoArena *arena;    /* AST nodes live here */
+} AgoModule;
+
 typedef struct {
     AgoEnv env;
     AgoCtx *ctx;
     AgoArena *arena;    /* temporary allocations (saved_closure_env) */
     AgoGc *gc;          /* GC-tracked runtime objects */
+    const char *file;   /* current file path (for import resolution) */
+    /* Module cache */
+    AgoModule modules[MAX_MODULES];
+    int module_count;
     /* Return mechanism */
     bool has_return;
     AgoVal return_value;
@@ -211,6 +223,79 @@ static void gc_collect(AgoInterp *interp) {
     mark_val(interp->return_value);
     /* Sweep unreachable objects */
     ago_gc_sweep(interp->gc);
+}
+
+/* ---- Module loading helpers ---- */
+
+/* Extract directory from a file path. Returns "" for bare filenames. */
+static void path_dir(const char *filepath, char *buf, size_t bufsize) {
+    const char *last_sep = NULL;
+    for (const char *p = filepath; *p; p++) {
+        if (*p == '/') last_sep = p;
+    }
+    if (!last_sep) {
+        buf[0] = '\0';
+        return;
+    }
+    size_t len = (size_t)(last_sep - filepath);
+    if (len >= bufsize) len = bufsize - 1;
+    memcpy(buf, filepath, len);
+    buf[len] = '\0';
+}
+
+/* Resolve import path relative to current file. Appends .ago extension. */
+static void resolve_import(const char *base_file, const char *import_path,
+                           int import_len, char *buf, size_t bufsize) {
+    char dir[512];
+    path_dir(base_file, dir, sizeof(dir));
+    if (dir[0]) {
+        snprintf(buf, bufsize, "%s/%.*s.ago", dir, import_len, import_path);
+    } else {
+        snprintf(buf, bufsize, "%.*s.ago", import_len, import_path);
+    }
+}
+
+/* Read entire file into malloc'd buffer. Returns NULL on failure. */
+static char *read_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t read = fread(buf, 1, (size_t)len, f);
+    buf[read] = '\0';
+    fclose(f);
+    return buf;
+}
+
+/* Check if module already loaded */
+static bool module_loaded(AgoInterp *interp, const char *path) {
+    for (int i = 0; i < interp->module_count; i++) {
+        if (strcmp(interp->modules[i].path, path) == 0) return true;
+    }
+    return false;
+}
+
+/* Register module — takes ownership of path (strdup'd), source, and arena */
+static bool module_register(AgoInterp *interp, const char *path,
+                            char *source, AgoArena *arena) {
+    if (interp->module_count >= MAX_MODULES) return false;
+    AgoModule *m = &interp->modules[interp->module_count++];
+    m->path = strdup(path);
+    m->source = source;
+    m->arena = arena;
+    return true;
+}
+
+/* Free all module resources */
+static void module_cache_free(AgoInterp *interp) {
+    for (int i = 0; i < interp->module_count; i++) {
+        free(interp->modules[i].path);
+        free(interp->modules[i].source);
+        ago_arena_free(interp->modules[i].arena);
+    }
 }
 
 /* ---- Truthiness ---- */
@@ -893,8 +978,80 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
     }
 
     case AGO_NODE_STRUCT_DECL:
-        /* Struct declarations are type definitions — no runtime action needed yet */
         break;
+
+    case AGO_NODE_IMPORT: {
+        /* Resolve path relative to current file */
+        char resolved[512];
+        resolve_import(interp->file,
+                       node->as.import_stmt.path,
+                       node->as.import_stmt.path_length,
+                       resolved, sizeof(resolved));
+
+        /* Skip if already loaded */
+        if (module_loaded(interp, resolved)) break;
+
+        /* Read module file */
+        char *mod_source = read_file(resolved);
+        if (!mod_source) {
+            ago_error_set(interp->ctx, AGO_ERR_IO,
+                          ago_loc(NULL, node->line, node->column),
+                          "cannot open module '%.*s'",
+                          node->as.import_stmt.path_length,
+                          node->as.import_stmt.path);
+            return;
+        }
+
+        /* Parse module */
+        AgoArena *mod_arena = ago_arena_new();
+        if (!mod_arena) { free(mod_source); return; }
+
+        AgoParser mod_parser;
+        ago_parser_init(&mod_parser, mod_source, resolved, mod_arena, interp->ctx);
+        AgoNode *mod_program = ago_parser_parse(&mod_parser);
+
+        if (!mod_program || ago_error_occurred(interp->ctx)) {
+            ago_arena_free(mod_arena);
+            free(mod_source);
+            return;
+        }
+
+        /* Run sema on module (skip if it has imports — same reason as main) */
+        bool mod_has_imports = false;
+        for (int i = 0; i < mod_program->as.program.decl_count; i++) {
+            if (mod_program->as.program.decls[i] &&
+                mod_program->as.program.decls[i]->kind == AGO_NODE_IMPORT) {
+                mod_has_imports = true;
+                break;
+            }
+        }
+        if (!mod_has_imports) {
+            AgoSema *mod_sema = ago_sema_new(interp->ctx, mod_arena);
+            if (mod_sema) {
+                ago_sema_check(mod_sema, mod_program);
+                ago_sema_free(mod_sema);
+            }
+            if (ago_error_occurred(interp->ctx)) {
+                ago_arena_free(mod_arena);
+                free(mod_source);
+                return;
+            }
+        }
+
+        /* Register module — takes ownership of source and arena.
+         * Must register before execution to prevent circular imports. */
+        module_register(interp, resolved, mod_source, mod_arena);
+
+        /* Execute module in current interpreter (shares env, gc) */
+        const char *saved_file = interp->file;
+        interp->file = resolved;
+        for (int i = 0; i < mod_program->as.program.decl_count; i++) {
+            exec_stmt(interp, mod_program->as.program.decls[i]);
+            if (ago_error_occurred(interp->ctx)) break;
+        }
+        interp->file = saved_file;
+        break;
+    }
 
     case AGO_NODE_FN_DECL: {
         /* Register function in environment */
@@ -936,7 +1093,7 @@ static void exec_stmt(AgoInterp *interp, AgoNode *node) {
 
 /* ---- Public API ---- */
 
-int ago_interpret(AgoNode *program, AgoCtx *ctx) {
+int ago_interpret(AgoNode *program, const char *filename, AgoCtx *ctx) {
     if (!program || program->kind != AGO_NODE_PROGRAM) return -1;
 
     AgoArena *runtime_arena = ago_arena_new();
@@ -950,6 +1107,8 @@ int ago_interpret(AgoNode *program, AgoCtx *ctx) {
     interp.ctx = ctx;
     interp.arena = runtime_arena;
     interp.gc = gc;
+    interp.file = filename ? filename : "<stdin>";
+    interp.module_count = 0;
     interp.has_return = false;
     interp.return_value = val_nil();
     interp.return_jmp_set = false;
@@ -957,12 +1116,14 @@ int ago_interpret(AgoNode *program, AgoCtx *ctx) {
     for (int i = 0; i < program->as.program.decl_count; i++) {
         exec_stmt(&interp, program->as.program.decls[i]);
         if (ago_error_occurred(ctx)) {
+            module_cache_free(&interp);
             ago_gc_free(gc);
             ago_arena_free(runtime_arena);
             return -1;
         }
     }
 
+    module_cache_free(&interp);
     ago_gc_free(gc);
     ago_arena_free(runtime_arena);
     return 0;
@@ -978,15 +1139,27 @@ int ago_run(const char *source, const char *filename, AgoCtx *ctx) {
 
     int result = -1;
     if (program && !ago_error_occurred(ctx)) {
-        /* Semantic analysis: name resolution, immutability, arity */
-        AgoSema *sema = ago_sema_new(ctx, arena);
-        if (sema) {
-            ago_sema_check(sema, program);
-            ago_sema_free(sema);
+        /* Semantic analysis — skip for files with imports since imported
+         * names aren't available at sema time. Each module gets sema
+         * individually when loaded. */
+        bool has_imports = false;
+        for (int i = 0; i < program->as.program.decl_count; i++) {
+            if (program->as.program.decls[i] &&
+                program->as.program.decls[i]->kind == AGO_NODE_IMPORT) {
+                has_imports = true;
+                break;
+            }
+        }
+        if (!has_imports) {
+            AgoSema *sema = ago_sema_new(ctx, arena);
+            if (sema) {
+                ago_sema_check(sema, program);
+                ago_sema_free(sema);
+            }
         }
         /* Interpret only if sema passed */
         if (!ago_error_occurred(ctx)) {
-            result = ago_interpret(program, ctx);
+            result = ago_interpret(program, filename, ctx);
         }
     }
 

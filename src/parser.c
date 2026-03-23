@@ -705,6 +705,17 @@ static AgoNode *parse_statement(AgoParser *p) {
     if (parser_match(p, AGO_TOKEN_FOR)) {
         return parse_for_statement(p);
     }
+    if (parser_match(p, AGO_TOKEN_IMPORT)) {
+        parser_expect(p, AGO_TOKEN_STRING, "expected module path after 'import'");
+        if (ago_error_occurred(p->ctx)) return NULL;
+        AgoNode *n = node_new(p, AGO_NODE_IMPORT);
+        if (!n) return NULL;
+        /* Strip quotes from path: token includes surrounding " */
+        n->as.import_stmt.path = p->previous.start + 1;
+        n->as.import_stmt.path_length = p->previous.length - 2;
+        parser_match(p, AGO_TOKEN_NEWLINE);
+        return n;
+    }
     if (parser_match(p, AGO_TOKEN_FN)) {
         return parse_fn_declaration(p);
     }

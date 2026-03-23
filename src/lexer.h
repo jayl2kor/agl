@@ -30,6 +30,7 @@ typedef enum {
     AGO_TOKEN_MATCH,        /* match */
     AGO_TOKEN_OK,           /* ok */
     AGO_TOKEN_ERR,          /* err */
+    AGO_TOKEN_IMPORT,       /* import */
     AGO_TOKEN_BREAK,        /* break */
     AGO_TOKEN_CONTINUE,     /* continue */
 

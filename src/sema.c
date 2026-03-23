@@ -314,7 +314,10 @@ static void check_stmt(AgoSema *sema, AgoNode *node) {
         break;
 
     case AGO_NODE_STRUCT_DECL:
-        /* Struct names registered for future use (no check needed now) */
+        break;
+
+    case AGO_NODE_IMPORT:
+        /* Import paths validated at runtime (file existence); sema accepts */
         break;
 
     default:

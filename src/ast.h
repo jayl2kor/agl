@@ -38,6 +38,9 @@ typedef enum {
     AGO_NODE_FN_DECL,       /* fn name(params) -> type { body } */
     AGO_NODE_STRUCT_DECL,   /* struct Name { fields } */
 
+    /* Module */
+    AGO_NODE_IMPORT,        /* import "path" */
+
     /* Program root */
     AGO_NODE_PROGRAM,       /* list of top-level statements/declarations */
 } AgoNodeKind;
@@ -178,6 +181,9 @@ struct AgoNode {
             int *field_type_lengths;
             int field_count;
         } struct_decl;
+
+        /* AGO_NODE_IMPORT */
+        struct { const char *path; int path_length; } import_stmt;
 
         /* AGO_NODE_PROGRAM */
         struct { AgoNode **decls; int decl_count; } program;

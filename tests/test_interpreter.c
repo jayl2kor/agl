@@ -1,6 +1,7 @@
 #include "test_harness.h"
 #include "../src/interpreter.h"
 #include <unistd.h>
+#include <sys/stat.h>
 
 /* ---- Helper: run Ago source and capture stdout ---- */
 
@@ -38,6 +39,55 @@ static int run_and_capture(const char *source) {
         result = -1;
     }
     ago_ctx_free(c);
+    return result;
+}
+
+/* ---- Helper: write a temp file ---- */
+
+static void write_file(const char *path, const char *content) {
+    FILE *f = fopen(path, "w");
+    if (f) { fputs(content, f); fclose(f); }
+}
+
+/* ---- Helper: run from file and capture stdout ---- */
+
+static int run_file_and_capture(const char *filepath) {
+    FILE *f = fopen(filepath, "r");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *source = malloc((size_t)len + 1);
+    if (!source) { fclose(f); return -1; }
+    fread(source, 1, (size_t)len, f);
+    source[len] = '\0';
+    fclose(f);
+
+    fflush(stdout);
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { free(source); return -1; }
+    int saved_stdout = dup(STDOUT_FILENO);
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+
+    AgoCtx *c = ago_ctx_new();
+    int result = ago_run(source, filepath, c);
+
+    fflush(stdout);
+    dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+
+    ssize_t n = read(pipefd[0], captured_output, MAX_OUTPUT - 1);
+    close(pipefd[0]);
+    if (n < 0) n = 0;
+    captured_output[n] = '\0';
+
+    if (ago_error_occurred(c)) {
+        ago_error_print(ago_error_get(c));
+        result = -1;
+    }
+    ago_ctx_free(c);
+    free(source);
     return result;
 }
 
@@ -772,6 +822,70 @@ AGO_TEST(test_gc_result_survives) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
 }
 
+/* ---- Import / Modules ---- */
+
+#define TEST_DIR "/tmp/ago_test"
+
+static void setup_test_dir(void) {
+    (void)mkdir(TEST_DIR, 0755);
+}
+
+AGO_TEST(test_import_function) {
+    setup_test_dir();
+    write_file(TEST_DIR "/math.ago", "fn double(x: int) -> int { return x * 2 }\n");
+    write_file(TEST_DIR "/main.ago",
+        "import \"math\"\n"
+        "print(double(5))\n");
+    int r = run_file_and_capture(TEST_DIR "/main.ago");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "10\n");
+}
+
+AGO_TEST(test_import_variable) {
+    setup_test_dir();
+    write_file(TEST_DIR "/consts.ago", "let PI = 3\n");
+    write_file(TEST_DIR "/main2.ago",
+        "import \"consts\"\n"
+        "print(PI)\n");
+    int r = run_file_and_capture(TEST_DIR "/main2.ago");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "3\n");
+}
+
+AGO_TEST(test_import_multiple) {
+    setup_test_dir();
+    write_file(TEST_DIR "/a.ago", "fn fa() -> int { return 1 }\n");
+    write_file(TEST_DIR "/b.ago", "fn fb() -> int { return 2 }\n");
+    write_file(TEST_DIR "/main3.ago",
+        "import \"a\"\n"
+        "import \"b\"\n"
+        "print(fa() + fb())\n");
+    int r = run_file_and_capture(TEST_DIR "/main3.ago");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "3\n");
+}
+
+AGO_TEST(test_import_transitive) {
+    setup_test_dir();
+    write_file(TEST_DIR "/base.ago", "fn base_val() -> int { return 10 }\n");
+    write_file(TEST_DIR "/mid.ago",
+        "import \"base\"\n"
+        "fn mid_val() -> int { return base_val() + 5 }\n");
+    write_file(TEST_DIR "/main4.ago",
+        "import \"mid\"\n"
+        "print(mid_val())\n");
+    int r = run_file_and_capture(TEST_DIR "/main4.ago");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "15\n");
+}
+
+AGO_TEST(test_import_not_found) {
+    setup_test_dir();
+    write_file(TEST_DIR "/main5.ago", "import \"nonexistent\"\n");
+    int r = run_file_and_capture(TEST_DIR "/main5.ago");
+    AGO_ASSERT(ctx, r != 0);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -882,6 +996,13 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_gc_reachable_survives);
     AGO_RUN_TEST(&ctx, test_gc_closure_survives);
     AGO_RUN_TEST(&ctx, test_gc_result_survives);
+
+    /* Import / Modules */
+    AGO_RUN_TEST(&ctx, test_import_function);
+    AGO_RUN_TEST(&ctx, test_import_variable);
+    AGO_RUN_TEST(&ctx, test_import_multiple);
+    AGO_RUN_TEST(&ctx, test_import_transitive);
+    AGO_RUN_TEST(&ctx, test_import_not_found);
 
     AGO_SUMMARY(&ctx);
 }
