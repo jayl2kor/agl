@@ -696,6 +696,15 @@ AGO_TEST(test_err_match_non_result) {
     AGO_ASSERT(ctx, r != 0);
 }
 
+AGO_TEST(test_err_match_duplicate_arm) {
+    int r = run_and_capture(
+        "match ok(1) {\n"
+        "    ok(x) -> x\n"
+        "    ok(y) -> y\n"
+        "}");
+    AGO_ASSERT(ctx, r != 0);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -799,6 +808,7 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_print_result);
     AGO_RUN_TEST(&ctx, test_result_chaining);
     AGO_RUN_TEST(&ctx, test_err_match_non_result);
+    AGO_RUN_TEST(&ctx, test_err_match_duplicate_arm);
 
     AGO_SUMMARY(&ctx);
 }

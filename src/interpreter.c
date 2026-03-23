@@ -164,76 +164,53 @@ static bool is_truthy(AgoVal val) {
     return false;
 }
 
-/* ---- Built-in: print ---- */
+/* ---- Value printing ---- */
 
-static void builtin_print(AgoVal val) {
+/* Print value without trailing newline. Handles all types recursively. */
+static void print_val_inline(AgoVal val) {
     switch (val.kind) {
-    case VAL_INT:
-        printf("%lld\n", (long long)val.as.integer);
-        break;
-    case VAL_FLOAT:
-        printf("%g\n", val.as.floating);
-        break;
-    case VAL_BOOL:
-        printf("%s\n", val.as.boolean ? "true" : "false");
-        break;
+    case VAL_INT:    printf("%lld", (long long)val.as.integer); break;
+    case VAL_FLOAT:  printf("%g", val.as.floating); break;
+    case VAL_BOOL:   printf("%s", val.as.boolean ? "true" : "false"); break;
     case VAL_STRING:
-        if (val.as.string.length >= 2 && val.as.string.data[0] == '"') {
-            printf("%.*s\n", val.as.string.length - 2, val.as.string.data + 1);
-        } else {
-            printf("%.*s\n", val.as.string.length, val.as.string.data);
-        }
+        if (val.as.string.length >= 2 && val.as.string.data[0] == '"')
+            printf("%.*s", val.as.string.length - 2, val.as.string.data + 1);
+        else
+            printf("%.*s", val.as.string.length, val.as.string.data);
         break;
-    case VAL_NIL:
-        printf("nil\n");
-        break;
-    case VAL_FN:
-        printf("<fn>\n");
-        break;
-    case VAL_ARRAY: {
+    case VAL_NIL:    printf("nil"); break;
+    case VAL_FN:     printf("<fn>"); break;
+    case VAL_ARRAY:
         printf("[");
         for (int i = 0; i < val.as.array->count; i++) {
             if (i > 0) printf(", ");
             AgoVal elem = val.as.array->elements[i];
-            switch (elem.kind) {
-            case VAL_INT:    printf("%lld", (long long)elem.as.integer); break;
-            case VAL_FLOAT:  printf("%g", elem.as.floating); break;
-            case VAL_BOOL:   printf("%s", elem.as.boolean ? "true" : "false"); break;
-            case VAL_STRING:
+            if (elem.kind == VAL_STRING) {
+                /* Strings inside arrays print with quotes */
                 if (elem.as.string.length >= 2 && elem.as.string.data[0] == '"')
                     printf("\"%.*s\"", elem.as.string.length - 2, elem.as.string.data + 1);
-                break;
-            default: printf("..."); break;
+                else
+                    printf("\"%.*s\"", elem.as.string.length, elem.as.string.data);
+            } else {
+                print_val_inline(elem);
             }
         }
-        printf("]\n");
+        printf("]");
         break;
-    }
     case VAL_STRUCT:
-        printf("<struct %.*s>\n", val.as.strct->type_name_length, val.as.strct->type_name);
+        printf("<struct %.*s>", val.as.strct->type_name_length, val.as.strct->type_name);
         break;
-    case VAL_RESULT: {
-        AgoResultVal *rv = val.as.result;
-        printf("%s(", rv->is_ok ? "ok" : "err");
-        /* Print inner value without trailing newline */
-        AgoVal inner = rv->value;
-        switch (inner.kind) {
-        case VAL_INT:    printf("%lld", (long long)inner.as.integer); break;
-        case VAL_FLOAT:  printf("%g", inner.as.floating); break;
-        case VAL_BOOL:   printf("%s", inner.as.boolean ? "true" : "false"); break;
-        case VAL_STRING:
-            if (inner.as.string.length >= 2 && inner.as.string.data[0] == '"')
-                printf("%.*s", inner.as.string.length - 2, inner.as.string.data + 1);
-            else
-                printf("%.*s", inner.as.string.length, inner.as.string.data);
-            break;
-        case VAL_NIL:    printf("nil"); break;
-        default:         printf("..."); break;
-        }
-        printf(")\n");
+    case VAL_RESULT:
+        printf("%s(", val.as.result->is_ok ? "ok" : "err");
+        print_val_inline(val.as.result->value);
+        printf(")");
         break;
     }
-    }
+}
+
+static void builtin_print(AgoVal val) {
+    print_val_inline(val);
+    printf("\n");
 }
 
 /* ---- Call user function ---- */
@@ -257,13 +234,16 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
         if (ago_error_occurred(interp->ctx)) return val_nil();
     }
 
-    /* Save env state for restoration after call */
-    AgoEnv saved_env;
-    bool is_closure = (fn->captured_count > 0);
-
-    if (is_closure) {
-        /* Closure: save entire env, replace with captured env */
-        saved_env = interp->env;
+    /* For closures: arena-allocate env snapshot to avoid 7KB stack frame */
+    AgoEnv *saved_closure_env = NULL;
+    if (fn->captured_count > 0) {
+        saved_closure_env = ago_arena_alloc(interp->arena, sizeof(AgoEnv));
+        if (!saved_closure_env) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, call_node->line, call_node->column), "out of memory");
+            return val_nil();
+        }
+        *saved_closure_env = interp->env;
         env_init(&interp->env);
         for (int i = 0; i < fn->captured_count; i++) {
             env_define(&interp->env,
@@ -285,7 +265,7 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
             ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
                           ago_loc(NULL, call_node->line, call_node->column),
                           "too many variables (max %d)", MAX_VARS);
-            if (is_closure) interp->env = saved_env;
+            if (saved_closure_env) interp->env = *saved_closure_env;
             else interp->env.count = saved_count;
             return val_nil();
         }
@@ -316,8 +296,8 @@ static AgoVal call_user_fn(AgoInterp *interp, AgoFnVal *fn, AgoNode *call_node) 
     if (prev_jmp_set) memcpy(interp->return_jmp, prev_jmp, sizeof(jmp_buf));
 
     /* Restore env */
-    if (is_closure) {
-        interp->env = saved_env;
+    if (saved_closure_env) {
+        interp->env = *saved_closure_env;
     } else {
         interp->env.count = saved_count;
     }
@@ -619,6 +599,12 @@ static AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
             fn->captured_name_lengths = ago_arena_alloc(interp->arena, sizeof(int) * n_cap);
             fn->captured_values = ago_arena_alloc(interp->arena, sizeof(AgoVal) * n_cap);
             fn->captured_immutable = ago_arena_alloc(interp->arena, sizeof(bool) * n_cap);
+            if (!fn->captured_names || !fn->captured_name_lengths ||
+                !fn->captured_values || !fn->captured_immutable) {
+                ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                              ago_loc(NULL, node->line, node->column), "out of memory");
+                return val_nil();
+            }
             memcpy(fn->captured_names, interp->env.names, sizeof(char *) * n_cap);
             memcpy(fn->captured_name_lengths, interp->env.name_lengths, sizeof(int) * n_cap);
             memcpy(fn->captured_values, interp->env.values, sizeof(AgoVal) * n_cap);

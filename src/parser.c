@@ -160,66 +160,63 @@ static AgoNode *parse_unary(AgoParser *p, AgoTokenKind op) {
     return n;
 }
 
-/* Parse lambda expression: fn(params) -> type { body } */
-static AgoNode *parse_lambda(AgoParser *p) {
-    /* 'fn' already consumed */
-    AgoNode *n = node_new(p, AGO_NODE_LAMBDA);
-    if (!n) return NULL;
-    n->as.fn_decl.name = NULL;
-    n->as.fn_decl.name_length = 0;
+/* Shared: parse (params) -> return_type { body } into n->as.fn_decl.
+ * Caller must set node kind and name before calling.
+ * '(' must be the current token (not yet consumed). */
+static bool parse_fn_params_and_body(AgoParser *p, AgoNode *n) {
+    parser_expect(p, AGO_TOKEN_LPAREN, "expected '('");
+    if (ago_error_occurred(p->ctx)) return false;
 
-    parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after 'fn'");
-    if (ago_error_occurred(p->ctx)) return NULL;
-
-    const char *param_names[64]; int param_name_lens[64];
-    const char *param_types[64]; int param_type_lens[64];
-    int param_count = 0;
+    const char *pnames[64]; int pname_lens[64];
+    const char *ptypes[64]; int ptype_lens[64];
+    int pcount = 0;
 
     if (!parser_check(p, AGO_TOKEN_RPAREN)) {
         do {
             skip_newlines(p);
-            if (param_count >= 64) {
+            if (pcount >= 64) {
                 ago_error_set(p->ctx, AGO_ERR_SYNTAX,
                               ago_loc(p->lexer.file, p->current.line, p->current.column),
                               "too many parameters (max 64)");
-                return NULL;
+                return false;
             }
             parser_expect(p, AGO_TOKEN_IDENT, "expected parameter name");
-            if (ago_error_occurred(p->ctx)) return NULL;
-            param_names[param_count] = p->previous.start;
-            param_name_lens[param_count] = p->previous.length;
+            if (ago_error_occurred(p->ctx)) return false;
+            pnames[pcount] = p->previous.start;
+            pname_lens[pcount] = p->previous.length;
 
             parser_expect(p, AGO_TOKEN_COLON, "expected ':' after parameter name");
-            if (ago_error_occurred(p->ctx)) return NULL;
+            if (ago_error_occurred(p->ctx)) return false;
 
-            if (!parser_expect_type(p)) return NULL;
-            param_types[param_count] = p->previous.start;
-            param_type_lens[param_count] = p->previous.length;
+            if (!parser_expect_type(p)) return false;
+            ptypes[pcount] = p->previous.start;
+            ptype_lens[pcount] = p->previous.length;
 
-            param_count++;
+            pcount++;
             skip_newlines(p);
         } while (parser_match(p, AGO_TOKEN_COMMA));
     }
 
     parser_expect(p, AGO_TOKEN_RPAREN, "expected ')' after parameters");
-    if (ago_error_occurred(p->ctx)) return NULL;
+    if (ago_error_occurred(p->ctx)) return false;
 
-    n->as.fn_decl.param_count = param_count;
-    if (param_count > 0) {
-        n->as.fn_decl.param_names = ago_arena_alloc(p->arena, sizeof(char *) * (size_t)param_count);
-        n->as.fn_decl.param_name_lengths = ago_arena_alloc(p->arena, sizeof(int) * (size_t)param_count);
-        n->as.fn_decl.param_types = ago_arena_alloc(p->arena, sizeof(char *) * (size_t)param_count);
-        n->as.fn_decl.param_type_lengths = ago_arena_alloc(p->arena, sizeof(int) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_names, param_names, sizeof(char *) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_name_lengths, param_name_lens, sizeof(int) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_types, param_types, sizeof(char *) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_type_lengths, param_type_lens, sizeof(int) * (size_t)param_count);
+    n->as.fn_decl.param_count = pcount;
+    if (pcount > 0) {
+        size_t sz = (size_t)pcount;
+        n->as.fn_decl.param_names = ago_arena_alloc(p->arena, sizeof(char *) * sz);
+        n->as.fn_decl.param_name_lengths = ago_arena_alloc(p->arena, sizeof(int) * sz);
+        n->as.fn_decl.param_types = ago_arena_alloc(p->arena, sizeof(char *) * sz);
+        n->as.fn_decl.param_type_lengths = ago_arena_alloc(p->arena, sizeof(int) * sz);
+        memcpy(n->as.fn_decl.param_names, pnames, sizeof(char *) * sz);
+        memcpy(n->as.fn_decl.param_name_lengths, pname_lens, sizeof(int) * sz);
+        memcpy(n->as.fn_decl.param_types, ptypes, sizeof(char *) * sz);
+        memcpy(n->as.fn_decl.param_type_lengths, ptype_lens, sizeof(int) * sz);
     }
 
     /* Optional return type: -> type */
     n->as.fn_decl.return_type = NULL;
     if (parser_match(p, AGO_TOKEN_ARROW)) {
-        if (!parser_expect_type(p)) return NULL;
+        if (!parser_expect_type(p)) return false;
         n->as.fn_decl.return_type = p->previous.start;
         n->as.fn_decl.return_type_length = p->previous.length;
     }
@@ -227,6 +224,16 @@ static AgoNode *parse_lambda(AgoParser *p) {
     /* Body */
     skip_newlines(p);
     n->as.fn_decl.body = parse_block(p);
+    return !ago_error_occurred(p->ctx);
+}
+
+/* Parse lambda expression: fn(params) -> type { body } */
+static AgoNode *parse_lambda(AgoParser *p) {
+    AgoNode *n = node_new(p, AGO_NODE_LAMBDA);
+    if (!n) return NULL;
+    n->as.fn_decl.name = NULL;
+    n->as.fn_decl.name_length = 0;
+    if (!parse_fn_params_and_body(p, n)) return NULL;
     return n;
 }
 
@@ -264,6 +271,12 @@ static AgoNode *parse_match_expression(AgoParser *p) {
     for (int arm = 0; arm < 2; arm++) {
         skip_newlines(p);
         if (parser_match(p, AGO_TOKEN_OK)) {
+            if (n->as.match_expr.ok_body) {
+                ago_error_set(p->ctx, AGO_ERR_SYNTAX,
+                              ago_loc(p->lexer.file, p->previous.line, p->previous.column),
+                              "duplicate 'ok' arm in match");
+                return NULL;
+            }
             parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after 'ok'");
             if (ago_error_occurred(p->ctx)) return NULL;
             parser_expect(p, AGO_TOKEN_IDENT, "expected binding name");
@@ -277,6 +290,12 @@ static AgoNode *parse_match_expression(AgoParser *p) {
             n->as.match_expr.ok_body = parse_expression(p, PREC_NONE);
             if (ago_error_occurred(p->ctx)) return NULL;
         } else if (parser_match(p, AGO_TOKEN_ERR)) {
+            if (n->as.match_expr.err_body) {
+                ago_error_set(p->ctx, AGO_ERR_SYNTAX,
+                              ago_loc(p->lexer.file, p->previous.line, p->previous.column),
+                              "duplicate 'err' arm in match");
+                return NULL;
+            }
             parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after 'err'");
             if (ago_error_occurred(p->ctx)) return NULL;
             parser_expect(p, AGO_TOKEN_IDENT, "expected binding name");
@@ -645,7 +664,7 @@ static AgoNode *parse_block(AgoParser *p) {
     return n;
 }
 
-/* Parse function declaration */
+/* Parse function declaration: fn name(params) -> type { body } */
 static AgoNode *parse_fn_declaration(AgoParser *p) {
     parser_expect(p, AGO_TOKEN_IDENT, "expected function name");
     if (ago_error_occurred(p->ctx)) return NULL;
@@ -654,64 +673,7 @@ static AgoNode *parse_fn_declaration(AgoParser *p) {
     if (!n) return NULL;
     n->as.fn_decl.name = p->previous.start;
     n->as.fn_decl.name_length = p->previous.length;
-
-    /* Parameters */
-    parser_expect(p, AGO_TOKEN_LPAREN, "expected '(' after function name");
-    if (ago_error_occurred(p->ctx)) return NULL;
-
-    const char *param_names[64];
-    int param_name_lens[64];
-    const char *param_types[64];
-    int param_type_lens[64];
-    int param_count = 0;
-
-    if (!parser_check(p, AGO_TOKEN_RPAREN)) {
-        do {
-            skip_newlines(p);
-            if (param_count >= 64) { ago_error_set(p->ctx, AGO_ERR_SYNTAX, ago_loc(p->lexer.file, p->current.line, p->current.column), "too many parameters (max 64)"); return NULL; }
-            parser_expect(p, AGO_TOKEN_IDENT, "expected parameter name");
-            if (ago_error_occurred(p->ctx)) return NULL;
-            param_names[param_count] = p->previous.start;
-            param_name_lens[param_count] = p->previous.length;
-
-            parser_expect(p, AGO_TOKEN_COLON, "expected ':' after parameter name");
-            if (ago_error_occurred(p->ctx)) return NULL;
-
-            if (!parser_expect_type(p)) return NULL;
-            param_types[param_count] = p->previous.start;
-            param_type_lens[param_count] = p->previous.length;
-
-            param_count++;
-            skip_newlines(p);
-        } while (parser_match(p, AGO_TOKEN_COMMA));
-    }
-
-    parser_expect(p, AGO_TOKEN_RPAREN, "expected ')' after parameters");
-    if (ago_error_occurred(p->ctx)) return NULL;
-
-    n->as.fn_decl.param_count = param_count;
-    if (param_count > 0) {
-        n->as.fn_decl.param_names = ago_arena_alloc(p->arena, sizeof(char *) * (size_t)param_count);
-        n->as.fn_decl.param_name_lengths = ago_arena_alloc(p->arena, sizeof(int) * (size_t)param_count);
-        n->as.fn_decl.param_types = ago_arena_alloc(p->arena, sizeof(char *) * (size_t)param_count);
-        n->as.fn_decl.param_type_lengths = ago_arena_alloc(p->arena, sizeof(int) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_names, param_names, sizeof(char *) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_name_lengths, param_name_lens, sizeof(int) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_types, param_types, sizeof(char *) * (size_t)param_count);
-        memcpy(n->as.fn_decl.param_type_lengths, param_type_lens, sizeof(int) * (size_t)param_count);
-    }
-
-    /* Optional return type: -> type */
-    n->as.fn_decl.return_type = NULL;
-    if (parser_match(p, AGO_TOKEN_ARROW)) {
-        if (!parser_expect_type(p)) return NULL;
-        n->as.fn_decl.return_type = p->previous.start;
-        n->as.fn_decl.return_type_length = p->previous.length;
-    }
-
-    /* Body */
-    skip_newlines(p);
-    n->as.fn_decl.body = parse_block(p);
+    if (!parse_fn_params_and_body(p, n)) return NULL;
     return n;
 }
 
