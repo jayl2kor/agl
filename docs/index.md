@@ -73,3 +73,108 @@ print(data["content"][0]["text"])
 - **Closures** and higher-order functions
 - **Module system** with file-based imports
 - **671+ tests**, ASan + UBSan clean
+
+---
+
+## Error Handling
+
+AGL uses a `result` type for safe error handling — no exceptions, no crashes.
+
+```
+// Result type
+fn safe_divide(a: int, b: int) -> result {
+    if b == 0 { return err("division by zero") }
+    return ok(a / b)
+}
+
+// Pattern matching
+let msg = match safe_divide(10, 0) {
+    ok(v) -> str(v)
+    err(e) -> f"Error: {e}"
+}
+print(msg)  // Error: division by zero
+
+// ? operator for concise error propagation
+fn process() -> result {
+    let a = safe_divide(10, 2)?   // unwraps ok(5)
+    let b = safe_divide(a, 0)?    // returns err("division by zero")
+    return ok(b)
+}
+```
+
+---
+
+## Data Processing
+
+Maps, JSON, and string operations make data manipulation straightforward.
+
+```
+// Build a request
+let request = {
+    "model": "claude-sonnet-4-20250514",
+    "messages": [{"role": "user", "content": "Hello"}]
+}
+let json = json_stringify(request)
+
+// Parse response
+let data = json_parse(json)?
+let model = data["model"]
+print(f"Using {model}")
+
+// String operations
+let words = split("hello world foo", " ")
+let upper = map(words, fn(w: string) -> string {
+    return to_upper(substr(w, 0, 1)) + substr(w, 1, len(w) - 1)
+})
+print(join(upper, " "))  // Hello World Foo
+```
+
+---
+
+## System Interaction
+
+AGL can interact with the operating system — environment variables, processes, files, and HTTP.
+
+```
+// Environment variables
+let home = env_default("HOME", "/tmp")
+
+// Execute commands
+let result = exec("ls", ["-la"])?
+print(result["stdout"])
+
+// File I/O
+write_file("/tmp/hello.txt", "Hello from AGL!")?
+let content = read_file("/tmp/hello.txt")?
+print(content)
+
+// HTTP requests
+let resp = http_get("https://api.example.com/data", {})?
+print(f"Status: {resp[\"status\"]}")
+```
+
+---
+
+## Functions and Closures
+
+First-class functions, closures, and higher-order functions.
+
+```
+// Higher-order functions
+let numbers = [1, 2, 3, 4, 5]
+let evens = filter(numbers, fn(x: int) -> bool { return x % 2 == 0 })
+let doubled = map(evens, fn(x: int) -> int { return x * 2 })
+print(doubled)  // [4, 8]
+
+// Closures
+fn make_counter() -> fn {
+    var count = 0
+    return fn() -> int {
+        count = count + 1
+        return count
+    }
+}
+let counter = make_counter()
+print(counter())  // 1
+print(counter())  // 2
+```

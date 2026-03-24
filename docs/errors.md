@@ -40,6 +40,45 @@ error: index 5 out of bounds (length 3)
 
 Maximum trace depth is 16 frames.
 
+#### Stack Trace Example
+
+Nested function calls produce a full call stack when an error occurs:
+
+```
+// Nested function error shows call stack:
+fn divide(a: int, b: int) -> int {
+    return a / b
+}
+
+fn average(a: int, b: int) -> int {
+    return divide(a + b, 0)
+}
+
+average(10, 20)
+```
+
+```
+// Output:
+// error: division by zero
+//   in divide() (line 3)
+//   in average() (line 7)
+```
+
+Lambdas passed to higher-order functions also appear in the trace:
+
+```
+let nums = [1, 2, 0, 4]
+let inverted = map(nums, fn(x: int) -> int {
+    return 100 / x
+})
+```
+
+```
+// Output:
+// error: division by zero
+//   in <lambda> (line 3)
+```
+
 ---
 
 ## Error Categories
@@ -95,6 +134,56 @@ Produced by semantic analysis and the interpreter for undefined or duplicate nam
 | `unknown function 'foo'` | Called `foo()` but no function with that name exists. | Define the function or check the name spelling. |
 | `no field 'f'` | Accessed `.f` on a struct that has no field named `f`. | Check the struct definition for valid field names. |
 
+#### Example: Undefined Variable
+
+```
+// This produces an error:
+print(x)  // error: undefined variable 'x'
+```
+
+```
+// Fix: declare the variable before use
+let x = 42
+print(x)
+```
+
+#### Example: Unknown Function
+
+```
+// This produces an error:
+let result = compute(10)  // error: unknown function 'compute'
+```
+
+```
+// Fix: define the function before calling it
+fn compute(n: int) -> int {
+    return n * 2
+}
+let result = compute(10)
+```
+
+#### Example: No Such Field
+
+```
+// This produces an error:
+struct Point {
+    x: int
+    y: int
+}
+let p = Point { x: 10, y: 20 }
+print(p.z)  // error: no field 'z'
+```
+
+```
+// Fix: use a field name that exists on the struct
+struct Point {
+    x: int
+    y: int
+}
+let p = Point { x: 10, y: 20 }
+print(p.x)
+```
+
 ---
 
 ### AGL_ERR_TYPE -- Type Errors
@@ -110,6 +199,7 @@ Produced by semantic analysis and the interpreter for type mismatches.
 | `cannot index non-array value` | Index `[n]` on a value that is not an array. | Only use `[index]` on array values. |
 | `array index must be an integer` | Non-integer used as array index. | Use an `int` value as the index. |
 | `match requires a result value` | `match` applied to a non-result value. | Only match on values produced by `ok()` or `err()`. |
+| `'?' operator requires a result value` | `?` applied to a non-result value. | Only use `?` on values produced by `ok()` or `err()`. |
 | `expression is not callable` | Attempted to call a non-function value with `()`. | Ensure the callee is a function. |
 | `for-in requires an array` | `for x in val` where `val` is not an array. | Only iterate over array values. |
 | `expected N arguments, got M` | Function call arity mismatch (detected by sema). | Pass the correct number of arguments. |
@@ -125,6 +215,123 @@ Produced by semantic analysis and the interpreter for type mismatches.
 | `read_file() requires a string path` | `read_file()` called with non-string argument. | Pass a string path. |
 | `file_exists() requires a string path` | `file_exists()` called with non-string argument. | Pass a string path. |
 | `write_file() requires (string, string)` | `write_file()` called with wrong argument types. | Pass `(path_string, content_string)`. |
+
+#### Example: Immutable Assignment
+
+```
+// This produces an error:
+let x = 10
+x = 20  // error: cannot assign to immutable variable 'x'
+```
+
+```
+// Fix: use var instead of let for mutable variables
+var x = 10
+x = 20
+```
+
+#### Example: Type Mismatch in Operations
+
+```
+// This produces an error:
+let result = 42 + "hello"  // error: invalid binary operation
+```
+
+```
+// Fix: convert to the same type before operating
+let result = str(42) + " hello"
+```
+
+```
+// Also an error -- mixing int and float:
+let sum = 10 + 2.5  // error: invalid binary operation
+```
+
+```
+// Fix: use the same numeric type
+let sum = 10.0 + 2.5
+```
+
+#### Example: Match on Non-Result
+
+```
+// This produces an error:
+let x = 42
+match x {               // error: match requires a result value
+    ok(v) -> print(v)
+    err(e) -> print(e)
+}
+```
+
+```
+// Fix: match only on result values
+fn safe_div(a: int, b: int) -> result {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+match safe_div(10, 3) {
+    ok(v) -> print(v)
+    err(e) -> print(e)
+}
+```
+
+#### Example: ? on Non-Result
+
+```
+// This produces an error:
+let x = 42
+let y = x?  // error: '?' operator requires a result value
+```
+
+```
+// Fix: use ? only on result values returned by ok() or err()
+fn parse_number(s: string) -> result {
+    let n = int(s)
+    return ok(n)
+}
+fn process() -> result {
+    let val = parse_number("42")?  // unwraps ok, propagates err
+    return ok(val + 1)
+}
+```
+
+#### Example: For-In on Non-Array
+
+```
+// This produces an error:
+let name = "hello"
+for ch in name {        // error: for-in requires an array
+    print(ch)
+}
+```
+
+```
+// Fix: iterate only over arrays
+let letters = ["h", "e", "l", "l", "o"]
+for ch in letters {
+    print(ch)
+}
+```
+
+#### Example: Wrong Argument Count
+
+```
+// This produces an error:
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+print(add(1))        // error: expected 2 arguments, got 1
+```
+
+```
+// Fix: pass the correct number of arguments
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+print(add(1, 2))
+```
 
 ---
 
@@ -148,6 +355,79 @@ Produced by the interpreter during execution.
 | `float() invalid number string` | `float("abc")` -- string cannot be parsed as float. | Pass a valid numeric string. |
 | `unsupported expression type` | Internal: AST node not handled by evaluator. | Report as a bug. |
 | `unsupported statement type` | Internal: AST node not handled by executor. | Report as a bug. |
+
+#### Example: Division by Zero
+
+```
+// This produces an error:
+let ratio = 100 / 0  // error: division by zero
+```
+
+```
+// Fix: guard against zero before dividing
+fn safe_div(a: int, b: int) -> result {
+    if b == 0 {
+        return err("cannot divide by zero")
+    }
+    return ok(a / b)
+}
+match safe_div(100, 0) {
+    ok(v) -> print(v)
+    err(e) -> print(e)    // prints: cannot divide by zero
+}
+```
+
+#### Example: Index Out of Bounds
+
+```
+// This produces an error:
+let items = [10, 20, 30]
+print(items[5])  // error: index 5 out of bounds (length 3)
+```
+
+```
+// Fix: check the index against the array length
+let items = [10, 20, 30]
+let i = 2
+if i < len(items) {
+    print(items[i])  // prints: 30
+}
+```
+
+```
+// Negative indices are also out of bounds:
+let items = [10, 20, 30]
+print(items[-1])  // error: index -1 out of bounds (length 3)
+```
+
+```
+// Fix: use a valid non-negative index
+let items = [10, 20, 30]
+print(items[len(items) - 1])  // prints: 30
+```
+
+#### Example: Maximum Call Depth Exceeded
+
+```
+// This produces an error:
+fn loop(n: int) -> int {
+    return loop(n + 1)  // error: maximum call depth exceeded (limit 512)
+}
+loop(0)
+```
+
+```
+// Fix: add a base case to stop recursion
+fn countdown(n: int) {
+    if n <= 0 {
+        print("done")
+        return
+    }
+    print(n)
+    countdown(n - 1)
+}
+countdown(5)
+```
 
 #### Built-in Arity Errors
 
@@ -178,6 +458,29 @@ Produced by the module system during import resolution.
 |---------|-------|-----|
 | `invalid import path 'path'` | Path contains `..`, resolves outside base directory, or is too long. | Use a relative path without `..` that stays within the project. |
 | `cannot open module 'path'` | Module file does not exist or cannot be read. | Verify the file exists at the expected location (`.agl` extension is added automatically). |
+
+#### Example: Invalid Import Path
+
+```
+// This produces an error:
+import "../secret/config"  // error: invalid import path '../secret/config'
+```
+
+```
+// Fix: use a relative path without '..' that stays within the project
+import "lib/config"
+```
+
+```
+// Also invalid -- escaping the project directory:
+import "../../etc/passwd"  // error: invalid import path '../../etc/passwd'
+```
+
+```
+// Fix: only import modules within your project
+import "utils"       // imports utils.agl from the same directory
+import "lib/math"    // imports lib/math.agl relative to current file
+```
 
 ---
 
