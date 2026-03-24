@@ -1,0 +1,76 @@
+// AGL Benchmark Suite
+// Measures execution speed for common patterns
+
+// 1. Fibonacci (recursive)
+fn fib(n: int) -> int {
+    if n <= 1 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+let t1 = now()
+let result = fib(25)
+let elapsed1 = now() - t1
+print(f"fib(25) = {result}  ({elapsed1}ms)")
+
+// 2. Loop with accumulation
+let t2 = now()
+var sum = 0
+var i = 0
+while i < 100000 {
+    sum = sum + i
+    i = i + 1
+}
+let elapsed2 = now() - t2
+print(f"sum(0..100000) = {sum}  ({elapsed2}ms)")
+
+// 3. String operations
+let t3 = now()
+var s = ""
+var j = 0
+while j < 1000 {
+    s = s + "x"
+    j = j + 1
+}
+let elapsed3 = now() - t3
+print(f"string concat x1000 len={len(s)}  ({elapsed3}ms)")
+
+// 4. Array operations
+let t4 = now()
+var arr = []
+var k = 0
+while k < 1000 {
+    arr = push(arr, k)
+    k = k + 1
+}
+let filtered = filter(arr, fn(x: int) -> bool { return x % 2 == 0 })
+let mapped = map(filtered, fn(x: int) -> int { return x * 2 })
+let elapsed4 = now() - t4
+print(f"array push+filter+map len={len(mapped)}  ({elapsed4}ms)")
+
+// 5. Map operations
+let t5 = now()
+var m = {}
+var l = 0
+while l < 100 {
+    m = map_set(m, str(l), l * l)
+    l = l + 1
+}
+let elapsed5 = now() - t5
+print(f"map build 100 entries  ({elapsed5}ms)")
+
+// 6. JSON round-trip
+let t6 = now()
+var n = 0
+while n < 100 {
+    let obj = {"name": "test", "value": n, "tags": [1, 2, 3]}
+    let s2 = json_stringify(obj)
+    let parsed = json_parse(s2)?
+    n = n + 1
+}
+let elapsed6 = now() - t6
+print(f"json roundtrip x100  ({elapsed6}ms)")
+
+// Total
+let total = elapsed1 + elapsed2 + elapsed3 + elapsed4 + elapsed5 + elapsed6
+print("")
+print(f"Total: {total}ms")

@@ -1,0 +1,30 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcurl-dev (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Build
+        run: make clean && make agl
+
+      - name: Test
+        run: make test
+
+      - name: Run examples
+        run: ./agl examples/hello.agl
