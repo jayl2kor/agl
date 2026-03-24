@@ -136,7 +136,8 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
         if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "len() takes exactly 1 argument"); return val_nil(); }
         if (args[0].kind == VAL_ARRAY) return val_int(args[0].as.array->count);
         if (args[0].kind == VAL_STRING) { int slen; str_content(args[0], &slen); return val_int(slen); }
-        ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "len() requires an array or string");
+        if (args[0].kind == VAL_MAP) return val_int(args[0].as.map->count);
+        ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "len() requires an array, string, or map");
         return val_nil();
 
     case 2: /* type */
@@ -147,6 +148,7 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
           case VAL_BOOL: tname = "bool"; break; case VAL_STRING: tname = "string"; break;
           case VAL_FN: tname = "fn"; break; case VAL_ARRAY: tname = "array"; break;
           case VAL_STRUCT: tname = "struct"; break; case VAL_RESULT: tname = "result"; break;
+          case VAL_MAP: tname = "map"; break;
           case VAL_NIL: tname = "nil"; break; default: tname = "unknown"; break;
           }
           return val_string(tname, (int)strlen(tname));
@@ -165,6 +167,7 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
           case VAL_STRUCT: n = snprintf(buf, sizeof(buf), "<struct %.*s>", arg.as.strct->type_name_length, arg.as.strct->type_name); break;
           case VAL_RESULT: n = snprintf(buf, sizeof(buf), "%s(...)", arg.as.result->is_ok ? "ok" : "err"); break;
           case VAL_ARRAY: n = snprintf(buf, sizeof(buf), "<array[%d]>", arg.as.array->count); break;
+          case VAL_MAP: n = snprintf(buf, sizeof(buf), "<map[%d]>", arg.as.map->count); break;
           case VAL_STRING: { int slen; const char *sd = str_content(arg, &slen);
               char *copy = ago_arena_alloc(vm->arena, (size_t)slen);
               if (copy) memcpy(copy, sd, (size_t)slen);
@@ -318,6 +321,273 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
           FILE *f = fopen(tmp, "r");
           if (f) { fclose(f); return val_bool(true); }
           return val_bool(false);
+        }
+
+    case 15: /* map_get */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_get() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_get() first argument must be a map"); return val_nil(); }
+        if (args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_get() key must be a string"); return val_nil(); }
+        { AgoMapVal *m = args[0].as.map;
+          int klen; const char *kdata = str_content(args[1], &klen);
+          for (int i = 0; i < m->count; i++) {
+              if (m->key_lengths[i] == klen && memcmp(m->keys[i], kdata, (size_t)klen) == 0) return m->values[i];
+          }
+          return val_nil();
+        }
+
+    case 16: /* map_set */
+        if (argc != 3) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_set() takes exactly 3 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_set() first argument must be a map"); return val_nil(); }
+        if (args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_set() key must be a string"); return val_nil(); }
+        { AgoMapVal *old = args[0].as.map;
+          int klen; const char *kdata = str_content(args[1], &klen);
+          /* Check if key exists */
+          int existing = -1;
+          for (int i = 0; i < old->count; i++) {
+              if (old->key_lengths[i] == klen && memcmp(old->keys[i], kdata, (size_t)klen) == 0) { existing = i; break; }
+          }
+          int new_count = existing >= 0 ? old->count : old->count + 1;
+          if (new_count > MAX_MAP_SIZE) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map size limit exceeded (max %d)", MAX_MAP_SIZE); return val_nil(); }
+          AgoMapVal *nm = ago_gc_alloc(vm->gc, sizeof(AgoMapVal), map_cleanup);
+          if (!nm) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          nm->count = new_count; nm->capacity = new_count;
+          nm->keys = malloc(sizeof(char *) * (size_t)new_count);
+          nm->key_lengths = malloc(sizeof(int) * (size_t)new_count);
+          nm->values = malloc(sizeof(AgoVal) * (size_t)new_count);
+          if (!nm->keys || !nm->key_lengths || !nm->values) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          /* Copy old entries */
+          for (int i = 0; i < old->count; i++) {
+              nm->keys[i] = old->keys[i];
+              nm->key_lengths[i] = old->key_lengths[i];
+              nm->values[i] = old->values[i];
+          }
+          if (existing >= 0) {
+              nm->values[existing] = args[2];
+          } else {
+              nm->keys[old->count] = kdata;
+              nm->key_lengths[old->count] = klen;
+              nm->values[old->count] = args[2];
+          }
+          AgoVal v; v.kind = VAL_MAP; v.as.map = nm; return v;
+        }
+
+    case 17: /* map_keys */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_keys() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_keys() requires a map"); return val_nil(); }
+        { AgoMapVal *m = args[0].as.map;
+          AgoArrayVal *arr = ago_gc_alloc(vm->gc, sizeof(AgoArrayVal), array_cleanup);
+          if (!arr) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          arr->count = m->count;
+          arr->elements = m->count > 0 ? malloc(sizeof(AgoVal) * (size_t)m->count) : NULL;
+          for (int i = 0; i < m->count; i++) {
+              arr->elements[i] = val_string(m->keys[i], m->key_lengths[i]);
+          }
+          AgoVal v; v.kind = VAL_ARRAY; v.as.array = arr; return v;
+        }
+
+    case 18: /* map_has */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_has() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_has() first argument must be a map"); return val_nil(); }
+        if (args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_has() key must be a string"); return val_nil(); }
+        { AgoMapVal *m = args[0].as.map;
+          int klen; const char *kdata = str_content(args[1], &klen);
+          for (int i = 0; i < m->count; i++) {
+              if (m->key_lengths[i] == klen && memcmp(m->keys[i], kdata, (size_t)klen) == 0) return val_bool(true);
+          }
+          return val_bool(false);
+        }
+
+    case 19: /* map_del */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_del() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_del() first argument must be a map"); return val_nil(); }
+        if (args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_del() key must be a string"); return val_nil(); }
+        { AgoMapVal *old = args[0].as.map;
+          int klen; const char *kdata = str_content(args[1], &klen);
+          AgoMapVal *nm = ago_gc_alloc(vm->gc, sizeof(AgoMapVal), map_cleanup);
+          if (!nm) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          int new_count = 0;
+          nm->keys = old->count > 0 ? malloc(sizeof(char *) * (size_t)old->count) : NULL;
+          nm->key_lengths = old->count > 0 ? malloc(sizeof(int) * (size_t)old->count) : NULL;
+          nm->values = old->count > 0 ? malloc(sizeof(AgoVal) * (size_t)old->count) : NULL;
+          for (int i = 0; i < old->count; i++) {
+              if (old->key_lengths[i] == klen && memcmp(old->keys[i], kdata, (size_t)klen) == 0) continue;
+              nm->keys[new_count] = old->keys[i];
+              nm->key_lengths[new_count] = old->key_lengths[i];
+              nm->values[new_count] = old->values[i];
+              new_count++;
+          }
+          nm->count = new_count; nm->capacity = old->count;
+          AgoVal v; v.kind = VAL_MAP; v.as.map = nm; return v;
+        }
+
+    case 20: /* split */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "split() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "split() requires (string, string)"); return val_nil(); }
+        { int slen, seplen;
+          const char *sdata = str_content(args[0], &slen);
+          const char *sepdata = str_content(args[1], &seplen);
+          /* Count parts and build array */
+          AgoVal parts[256]; int pcount = 0;
+          int start = 0;
+          for (int i = 0; i <= slen - seplen; i++) {
+              if (memcmp(sdata + i, sepdata, (size_t)seplen) == 0) {
+                  int plen = i - start;
+                  char *p = ago_arena_alloc(vm->arena, (size_t)(plen > 0 ? plen : 1));
+                  if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+                  parts[pcount++] = val_string(p ? p : "", plen);
+                  start = i + seplen;
+                  i = start - 1;
+              }
+          }
+          /* Last part */
+          { int plen = slen - start;
+            char *p = ago_arena_alloc(vm->arena, (size_t)(plen > 0 ? plen : 1));
+            if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+            parts[pcount++] = val_string(p ? p : "", plen);
+          }
+          AgoArrayVal *arr = ago_gc_alloc(vm->gc, sizeof(AgoArrayVal), array_cleanup);
+          if (!arr) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          arr->count = pcount;
+          arr->elements = malloc(sizeof(AgoVal) * (size_t)pcount);
+          memcpy(arr->elements, parts, sizeof(AgoVal) * (size_t)pcount);
+          AgoVal v; v.kind = VAL_ARRAY; v.as.array = arr; return v;
+        }
+
+    case 21: /* trim */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "trim() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "trim() requires a string"); return val_nil(); }
+        { int slen; const char *sdata = str_content(args[0], &slen);
+          int start = 0, end = slen;
+          while (start < end && (sdata[start] == ' ' || sdata[start] == '\t' || sdata[start] == '\n' || sdata[start] == '\r')) start++;
+          while (end > start && (sdata[end-1] == ' ' || sdata[end-1] == '\t' || sdata[end-1] == '\n' || sdata[end-1] == '\r')) end--;
+          int rlen = end - start;
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(rlen > 0 ? rlen : 1));
+          if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
+          return val_string(buf ? buf : "", rlen);
+        }
+
+    case 22: /* contains */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "contains() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "contains() requires (string, string)"); return val_nil(); }
+        { int slen, sublen;
+          const char *sdata = str_content(args[0], &slen);
+          const char *subdata = str_content(args[1], &sublen);
+          if (sublen > slen) return val_bool(false);
+          if (sublen == 0) return val_bool(true);
+          for (int i = 0; i <= slen - sublen; i++) {
+              if (memcmp(sdata + i, subdata, (size_t)sublen) == 0) return val_bool(true);
+          }
+          return val_bool(false);
+        }
+
+    case 23: /* replace */
+        if (argc != 3) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "replace() takes exactly 3 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING || args[2].kind != VAL_STRING) {
+            ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "replace() requires (string, string, string)"); return val_nil();
+        }
+        { int slen, oldlen, newlen;
+          const char *sdata = str_content(args[0], &slen);
+          const char *olddata = str_content(args[1], &oldlen);
+          const char *newdata = str_content(args[2], &newlen);
+          if (oldlen == 0) { /* No replacement possible */
+              char *buf = ago_arena_alloc(vm->arena, (size_t)slen);
+              if (buf) memcpy(buf, sdata, (size_t)slen);
+              return val_string(buf ? buf : sdata, slen);
+          }
+          /* Count occurrences */
+          int occ = 0;
+          for (int i = 0; i <= slen - oldlen; i++) {
+              if (memcmp(sdata + i, olddata, (size_t)oldlen) == 0) { occ++; i += oldlen - 1; }
+          }
+          int rlen = slen + occ * (newlen - oldlen);
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(rlen > 0 ? rlen : 1));
+          if (!buf) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          int wi = 0;
+          for (int i = 0; i < slen; ) {
+              if (i <= slen - oldlen && memcmp(sdata + i, olddata, (size_t)oldlen) == 0) {
+                  memcpy(buf + wi, newdata, (size_t)newlen); wi += newlen; i += oldlen;
+              } else { buf[wi++] = sdata[i++]; }
+          }
+          return val_string(buf, rlen);
+        }
+
+    case 24: /* starts_with */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "starts_with() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "starts_with() requires (string, string)"); return val_nil(); }
+        { int slen, plen;
+          const char *sdata = str_content(args[0], &slen);
+          const char *pdata = str_content(args[1], &plen);
+          return val_bool(slen >= plen && memcmp(sdata, pdata, (size_t)plen) == 0);
+        }
+
+    case 25: /* ends_with */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "ends_with() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "ends_with() requires (string, string)"); return val_nil(); }
+        { int slen, plen;
+          const char *sdata = str_content(args[0], &slen);
+          const char *pdata = str_content(args[1], &plen);
+          return val_bool(slen >= plen && memcmp(sdata + slen - plen, pdata, (size_t)plen) == 0);
+        }
+
+    case 26: /* to_upper */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "to_upper() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "to_upper() requires a string"); return val_nil(); }
+        { int slen; const char *sdata = str_content(args[0], &slen);
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(slen > 0 ? slen : 1));
+          if (!buf) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          for (int i = 0; i < slen; i++) buf[i] = (char)(sdata[i] >= 'a' && sdata[i] <= 'z' ? sdata[i] - 32 : sdata[i]);
+          return val_string(buf, slen);
+        }
+
+    case 27: /* to_lower */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "to_lower() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "to_lower() requires a string"); return val_nil(); }
+        { int slen; const char *sdata = str_content(args[0], &slen);
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(slen > 0 ? slen : 1));
+          if (!buf) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          for (int i = 0; i < slen; i++) buf[i] = (char)(sdata[i] >= 'A' && sdata[i] <= 'Z' ? sdata[i] + 32 : sdata[i]);
+          return val_string(buf, slen);
+        }
+
+    case 28: /* join */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "join() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_ARRAY || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "join() requires (array, string)"); return val_nil(); }
+        { AgoArrayVal *arr = args[0].as.array;
+          int seplen; const char *sepdata = str_content(args[1], &seplen);
+          /* Calculate total length */
+          int total = 0;
+          for (int i = 0; i < arr->count; i++) {
+              if (arr->elements[i].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "join() array elements must be strings"); return val_nil(); }
+              int elen; str_content(arr->elements[i], &elen);
+              total += elen;
+              if (i > 0) total += seplen;
+          }
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(total > 0 ? total : 1));
+          if (!buf && total > 0) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          int wi = 0;
+          for (int i = 0; i < arr->count; i++) {
+              if (i > 0 && seplen > 0) { memcpy(buf + wi, sepdata, (size_t)seplen); wi += seplen; }
+              int elen; const char *edata = str_content(arr->elements[i], &elen);
+              if (elen > 0) { memcpy(buf + wi, edata, (size_t)elen); wi += elen; }
+          }
+          return val_string(buf ? buf : "", total);
+        }
+
+    case 29: /* substr */
+        if (argc != 3) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "substr() takes exactly 3 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_INT || args[2].kind != VAL_INT) {
+            ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "substr() requires (string, int, int)"); return val_nil();
+        }
+        { int slen; const char *sdata = str_content(args[0], &slen);
+          int start = (int)args[1].as.integer;
+          int rlen = (int)args[2].as.integer;
+          if (start < 0) start = 0;
+          if (start > slen) start = slen;
+          if (rlen < 0) rlen = 0;
+          if (start + rlen > slen) rlen = slen - start;
+          char *buf = ago_arena_alloc(vm->arena, (size_t)(rlen > 0 ? rlen : 1));
+          if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
+          return val_string(buf ? buf : "", rlen);
         }
 
     default:
@@ -748,6 +1018,21 @@ static int vm_execute(Vm *vm, AgoChunk *chunk) {
         case AGO_OP_INDEX: {
             AgoVal idx_val = vm_pop(vm);
             AgoVal obj = vm_pop(vm);
+            if (obj.kind == VAL_MAP) {
+                if (idx_val.kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "map key must be a string"); return -1; }
+                int klen; const char *kdata = str_content(idx_val, &klen);
+                AgoMapVal *m = obj.as.map;
+                bool found = false;
+                for (int i = 0; i < m->count; i++) {
+                    if (m->key_lengths[i] == klen && memcmp(m->keys[i], kdata, (size_t)klen) == 0) {
+                        vm_push(vm, m->values[i]);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) { vm_push(vm, val_nil()); }
+                break;
+            }
             if (obj.kind != VAL_ARRAY) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "cannot index non-array value"); return -1; }
             if (idx_val.kind != VAL_INT) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "array index must be an integer"); return -1; }
             int i = (int)idx_val.as.integer;
@@ -797,6 +1082,29 @@ static int vm_execute(Vm *vm, AgoChunk *chunk) {
                               "no field '%.*s'", fname.as.string.length, fname.as.string.data);
                 return -1;
             }
+            break;
+        }
+
+        case AGO_OP_MAP: {
+            uint16_t count = read_u16(ip); ip += 2;
+            AgoMapVal *m = ago_gc_alloc(vm->gc, sizeof(AgoMapVal), map_cleanup);
+            if (!m) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, vm->current_line, 0), "out of memory"); return -1; }
+            m->count = count;
+            m->capacity = count > 0 ? count : 0;
+            m->keys = count > 0 ? malloc(sizeof(char *) * count) : NULL;
+            m->key_lengths = count > 0 ? malloc(sizeof(int) * count) : NULL;
+            m->values = count > 0 ? malloc(sizeof(AgoVal) * count) : NULL;
+            /* Stack has: key0, val0, key1, val1, ... (pushed in order) */
+            /* Pop in reverse: valN-1, keyN-1, ..., val0, key0 */
+            for (int i = count - 1; i >= 0; i--) {
+                m->values[i] = vm_pop(vm);
+                AgoVal key = vm_pop(vm);
+                int klen; const char *kdata = str_content(key, &klen);
+                m->keys[i] = kdata;
+                m->key_lengths[i] = klen;
+            }
+            AgoVal v; v.kind = VAL_MAP; v.as.map = m;
+            vm_push(vm, v);
             break;
         }
 

@@ -19,6 +19,23 @@ typedef enum {
     AGO_BUILTIN_READ_FILE,
     AGO_BUILTIN_WRITE_FILE,
     AGO_BUILTIN_FILE_EXISTS,
+    /* Map builtins */
+    AGO_BUILTIN_MAP_GET,
+    AGO_BUILTIN_MAP_SET,
+    AGO_BUILTIN_MAP_KEYS,
+    AGO_BUILTIN_MAP_HAS,
+    AGO_BUILTIN_MAP_DEL,
+    /* String builtins */
+    AGO_BUILTIN_SPLIT,
+    AGO_BUILTIN_TRIM,
+    AGO_BUILTIN_CONTAINS,
+    AGO_BUILTIN_REPLACE,
+    AGO_BUILTIN_STARTS_WITH,
+    AGO_BUILTIN_ENDS_WITH,
+    AGO_BUILTIN_TO_UPPER,
+    AGO_BUILTIN_TO_LOWER,
+    AGO_BUILTIN_JOIN,
+    AGO_BUILTIN_SUBSTR,
     AGO_BUILTIN_COUNT,
     AGO_BUILTIN_NONE = -1,
 } AgoBuiltinId;
@@ -39,6 +56,21 @@ static AgoBuiltinId resolve_builtin(const char *name, int len) {
     if (ago_str_eq(name, len, "read_file", 9)) return AGO_BUILTIN_READ_FILE;
     if (ago_str_eq(name, len, "write_file", 10)) return AGO_BUILTIN_WRITE_FILE;
     if (ago_str_eq(name, len, "file_exists", 11)) return AGO_BUILTIN_FILE_EXISTS;
+    if (ago_str_eq(name, len, "map_get", 7)) return AGO_BUILTIN_MAP_GET;
+    if (ago_str_eq(name, len, "map_set", 7)) return AGO_BUILTIN_MAP_SET;
+    if (ago_str_eq(name, len, "map_keys", 8)) return AGO_BUILTIN_MAP_KEYS;
+    if (ago_str_eq(name, len, "map_has", 7)) return AGO_BUILTIN_MAP_HAS;
+    if (ago_str_eq(name, len, "map_del", 7)) return AGO_BUILTIN_MAP_DEL;
+    if (ago_str_eq(name, len, "split", 5)) return AGO_BUILTIN_SPLIT;
+    if (ago_str_eq(name, len, "trim", 4)) return AGO_BUILTIN_TRIM;
+    if (ago_str_eq(name, len, "contains", 8)) return AGO_BUILTIN_CONTAINS;
+    if (ago_str_eq(name, len, "replace", 7)) return AGO_BUILTIN_REPLACE;
+    if (ago_str_eq(name, len, "starts_with", 11)) return AGO_BUILTIN_STARTS_WITH;
+    if (ago_str_eq(name, len, "ends_with", 9)) return AGO_BUILTIN_ENDS_WITH;
+    if (ago_str_eq(name, len, "to_upper", 8)) return AGO_BUILTIN_TO_UPPER;
+    if (ago_str_eq(name, len, "to_lower", 8)) return AGO_BUILTIN_TO_LOWER;
+    if (ago_str_eq(name, len, "join", 4)) return AGO_BUILTIN_JOIN;
+    if (ago_str_eq(name, len, "substr", 6)) return AGO_BUILTIN_SUBSTR;
     if (ago_str_eq(name, len, "ok", 2)) return AGO_BUILTIN_NONE;
     if (ago_str_eq(name, len, "err", 3)) return AGO_BUILTIN_NONE;
     return AGO_BUILTIN_NONE;
@@ -218,6 +250,20 @@ static void compile_expr(Compiler *c, AgoNode *node) {
         }
         emit(c, AGO_OP_ARRAY);
         emit_u16(c, (uint16_t)node->as.array_lit.count);
+        break;
+
+    case AGO_NODE_MAP_LIT:
+        for (int i = 0; i < node->as.map_lit.count; i++) {
+            /* Push key as string constant */
+            int key_idx = add_string_const(c, node->as.map_lit.keys[i],
+                                           node->as.map_lit.key_lengths[i]);
+            emit(c, AGO_OP_CONST);
+            emit_u16(c, (uint16_t)key_idx);
+            /* Compile value expression */
+            compile_expr(c, node->as.map_lit.values[i]);
+        }
+        emit(c, AGO_OP_MAP);
+        emit_u16(c, (uint16_t)node->as.map_lit.count);
         break;
 
     case AGO_NODE_INDEX:

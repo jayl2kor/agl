@@ -223,6 +223,105 @@ AGO_TEST(test_vm_fizzbuzz) {
         "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n");
 }
 
+/* ---- Map type tests ---- */
+
+AGO_TEST(test_vm_map_literal) {
+    int r = vm_run_and_capture(
+        "let m = {\"name\": \"ago\", \"version\": 1}\n"
+        "print(m[\"name\"])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "ago\n");
+}
+
+AGO_TEST(test_vm_map_empty) {
+    int r = vm_run_and_capture(
+        "let m = {}\n"
+        "print(len(m))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "0\n");
+}
+
+AGO_TEST(test_vm_map_set) {
+    int r = vm_run_and_capture(
+        "let m = map_set({}, \"key\", 42)\n"
+        "print(m[\"key\"])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\n");
+}
+
+AGO_TEST(test_vm_map_keys) {
+    int r = vm_run_and_capture(
+        "print(map_keys({\"a\": 1, \"b\": 2}))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[\"a\", \"b\"]\n");
+}
+
+AGO_TEST(test_vm_map_has) {
+    int r = vm_run_and_capture(
+        "print(map_has({\"x\": 1}, \"x\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_map_nested) {
+    int r = vm_run_and_capture(
+        "let m = {\"inner\": {\"value\": 99}}\n"
+        "print(m[\"inner\"][\"value\"])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "99\n");
+}
+
+/* ---- String builtin tests ---- */
+
+AGO_TEST(test_vm_split) {
+    int r = vm_run_and_capture(
+        "print(split(\"a,b,c\", \",\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[\"a\", \"b\", \"c\"]\n");
+}
+
+AGO_TEST(test_vm_trim) {
+    int r = vm_run_and_capture(
+        "print(trim(\"  hello  \"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "hello\n");
+}
+
+AGO_TEST(test_vm_contains) {
+    int r = vm_run_and_capture(
+        "print(contains(\"hello world\", \"world\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_replace) {
+    int r = vm_run_and_capture(
+        "print(replace(\"hello world\", \"world\", \"ago\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "hello ago\n");
+}
+
+AGO_TEST(test_vm_starts_ends) {
+    int r = vm_run_and_capture(
+        "print(starts_with(\"hello\", \"hel\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_join) {
+    int r = vm_run_and_capture(
+        "print(join([\"a\", \"b\", \"c\"], \"-\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "a-b-c\n");
+}
+
+AGO_TEST(test_vm_substr) {
+    int r = vm_run_and_capture(
+        "print(substr(\"hello\", 1, 3))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "ell\n");
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -250,6 +349,23 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_vm_stdlib);
     AGO_RUN_TEST(&ctx, test_vm_map_filter);
     AGO_RUN_TEST(&ctx, test_vm_fizzbuzz);
+
+    /* Map type tests */
+    AGO_RUN_TEST(&ctx, test_vm_map_literal);
+    AGO_RUN_TEST(&ctx, test_vm_map_empty);
+    AGO_RUN_TEST(&ctx, test_vm_map_set);
+    AGO_RUN_TEST(&ctx, test_vm_map_keys);
+    AGO_RUN_TEST(&ctx, test_vm_map_has);
+    AGO_RUN_TEST(&ctx, test_vm_map_nested);
+
+    /* String builtin tests */
+    AGO_RUN_TEST(&ctx, test_vm_split);
+    AGO_RUN_TEST(&ctx, test_vm_trim);
+    AGO_RUN_TEST(&ctx, test_vm_contains);
+    AGO_RUN_TEST(&ctx, test_vm_replace);
+    AGO_RUN_TEST(&ctx, test_vm_starts_ends);
+    AGO_RUN_TEST(&ctx, test_vm_join);
+    AGO_RUN_TEST(&ctx, test_vm_substr);
 
     AGO_SUMMARY(&ctx);
 }

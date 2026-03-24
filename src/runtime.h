@@ -22,6 +22,7 @@ typedef enum {
     VAL_ARRAY,
     VAL_STRUCT,
     VAL_RESULT,
+    VAL_MAP,
     VAL_NIL,
 } AgoValKind;
 
@@ -29,6 +30,7 @@ typedef struct AgoFnVal AgoFnVal;
 typedef struct AgoArrayVal AgoArrayVal;
 typedef struct AgoStructVal AgoStructVal;
 typedef struct AgoResultVal AgoResultVal;
+typedef struct AgoMapVal AgoMapVal;
 
 typedef struct AgoVal {
     AgoValKind kind;
@@ -41,6 +43,7 @@ typedef struct AgoVal {
         AgoArrayVal *array;
         AgoStructVal *strct;
         AgoResultVal *result;
+        AgoMapVal *map;
     } as;
 } AgoVal;
 
@@ -83,6 +86,17 @@ struct AgoResultVal {
     AgoObj obj;     /* GC header */
     bool is_ok;
     AgoVal value;
+};
+
+#define MAX_MAP_SIZE 256
+
+struct AgoMapVal {
+    AgoObj obj;             /* GC header */
+    const char **keys;      /* malloc'd */
+    int *key_lengths;       /* malloc'd */
+    AgoVal *values;         /* malloc'd */
+    int count;
+    int capacity;
 };
 
 /* ---- Value constructors (inline for performance) ---- */
@@ -158,6 +172,7 @@ typedef struct {
 const char *str_content(AgoVal s, int *out_len);
 void array_cleanup(void *p);
 void fn_cleanup(void *p);
+void map_cleanup(void *p);
 
 void env_init(AgoEnv *env);
 bool env_define(AgoEnv *env, const char *name, int length, AgoVal val,

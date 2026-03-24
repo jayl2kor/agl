@@ -158,6 +158,12 @@ static void check_expr(AgoSema *sema, AgoNode *node) {
         }
         break;
 
+    case AGO_NODE_MAP_LIT:
+        for (int i = 0; i < node->as.map_lit.count; i++) {
+            check_expr(sema, node->as.map_lit.values[i]);
+        }
+        break;
+
     case AGO_NODE_LAMBDA:
         scope_push(sema);
         for (int i = 0; i < node->as.fn_decl.param_count; i++) {
@@ -363,6 +369,23 @@ bool ago_sema_check(AgoSema *sema, AgoNode *program) {
     scope_define(sema->scope, "read_file", 9, false, true, 1);
     scope_define(sema->scope, "write_file", 10, false, true, 2);
     scope_define(sema->scope, "file_exists", 11, false, true, 1);
+    /* Map builtins */
+    scope_define(sema->scope, "map_get", 7, false, true, 2);
+    scope_define(sema->scope, "map_set", 7, false, true, 3);
+    scope_define(sema->scope, "map_keys", 8, false, true, 1);
+    scope_define(sema->scope, "map_has", 7, false, true, 2);
+    scope_define(sema->scope, "map_del", 7, false, true, 2);
+    /* String builtins */
+    scope_define(sema->scope, "split", 5, false, true, 2);
+    scope_define(sema->scope, "trim", 4, false, true, 1);
+    scope_define(sema->scope, "contains", 8, false, true, 2);
+    scope_define(sema->scope, "replace", 7, false, true, 3);
+    scope_define(sema->scope, "starts_with", 11, false, true, 2);
+    scope_define(sema->scope, "ends_with", 9, false, true, 2);
+    scope_define(sema->scope, "to_upper", 8, false, true, 1);
+    scope_define(sema->scope, "to_lower", 8, false, true, 1);
+    scope_define(sema->scope, "join", 4, false, true, 2);
+    scope_define(sema->scope, "substr", 6, false, true, 3);
 
     /* Check all top-level declarations/statements */
     for (int i = 0; i < program->as.program.decl_count; i++) {

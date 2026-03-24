@@ -260,11 +260,52 @@ AgoVal eval_expr(AgoInterp *interp, AgoNode *node) {
         return v;
     }
 
+    case AGO_NODE_MAP_LIT: {
+        AgoMapVal *m = ago_gc_alloc(interp->gc, sizeof(AgoMapVal), map_cleanup);
+        if (!m) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME,
+                          ago_loc(NULL, node->line, node->column), "out of memory");
+            return val_nil();
+        }
+        int count = node->as.map_lit.count;
+        m->count = count;
+        m->capacity = count;
+        m->keys = count > 0 ? malloc(sizeof(char *) * (size_t)count) : NULL;
+        m->key_lengths = count > 0 ? malloc(sizeof(int) * (size_t)count) : NULL;
+        m->values = count > 0 ? malloc(sizeof(AgoVal) * (size_t)count) : NULL;
+        for (int i = 0; i < count; i++) {
+            m->keys[i] = node->as.map_lit.keys[i];
+            m->key_lengths[i] = node->as.map_lit.key_lengths[i];
+            m->values[i] = eval_expr(interp, node->as.map_lit.values[i]);
+            if (ago_error_occurred(interp->ctx)) return val_nil();
+        }
+        AgoVal v;
+        v.kind = VAL_MAP;
+        v.as.map = m;
+        return v;
+    }
+
     case AGO_NODE_INDEX: {
         AgoVal obj = eval_expr(interp, node->as.index_expr.object);
         if (ago_error_occurred(interp->ctx)) return val_nil();
         AgoVal idx = eval_expr(interp, node->as.index_expr.index);
         if (ago_error_occurred(interp->ctx)) return val_nil();
+        if (obj.kind == VAL_MAP) {
+            if (idx.kind != VAL_STRING) {
+                ago_error_set(interp->ctx, AGO_ERR_TYPE,
+                              ago_loc(NULL, node->line, node->column),
+                              "map key must be a string");
+                return val_nil();
+            }
+            int klen; const char *kdata = str_content(idx, &klen);
+            AgoMapVal *mp = obj.as.map;
+            for (int i = 0; i < mp->count; i++) {
+                if (mp->key_lengths[i] == klen && memcmp(mp->keys[i], kdata, (size_t)klen) == 0) {
+                    return mp->values[i];
+                }
+            }
+            return val_nil();
+        }
         if (obj.kind != VAL_ARRAY) {
             ago_error_set(interp->ctx, AGO_ERR_TYPE,
                           ago_loc(NULL, node->line, node->column),

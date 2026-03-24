@@ -26,6 +26,13 @@ void fn_cleanup(void *p) {
     free(fn->captured_immutable);
 }
 
+void map_cleanup(void *p) {
+    AgoMapVal *m = p;
+    free(m->keys);
+    free(m->key_lengths);
+    free(m->values);
+}
+
 /* ---- Environment ---- */
 
 void env_init(AgoEnv *env) {
@@ -93,6 +100,13 @@ void mark_val(AgoVal val) {
         ago_gc_mark(&val.as.result->obj);
         mark_val(val.as.result->value);
         break;
+    case VAL_MAP:
+        if (!val.as.map || val.as.map->obj.marked) break;
+        ago_gc_mark(&val.as.map->obj);
+        for (int i = 0; i < val.as.map->count; i++) {
+            mark_val(val.as.map->values[i]);
+        }
+        break;
     default:
         break;  /* scalars: no heap objects */
     }
@@ -119,6 +133,7 @@ bool is_truthy(AgoVal val) {
     case VAL_ARRAY:  return val.as.array->count > 0;
     case VAL_STRUCT: return true;
     case VAL_RESULT: return val.as.result->is_ok;
+    case VAL_MAP:    return val.as.map->count > 0;
     }
     return false;
 }
@@ -159,6 +174,21 @@ void print_val_inline(AgoVal val) {
         printf("%s(", val.as.result->is_ok ? "ok" : "err");
         print_val_inline(val.as.result->value);
         printf(")");
+        break;
+    case VAL_MAP:
+        printf("{");
+        for (int i = 0; i < val.as.map->count; i++) {
+            if (i > 0) printf(", ");
+            printf("\"%.*s\": ", val.as.map->key_lengths[i], val.as.map->keys[i]);
+            AgoVal mval = val.as.map->values[i];
+            if (mval.kind == VAL_STRING) {
+                sdata = str_content(mval, &slen);
+                printf("\"%.*s\"", slen, sdata);
+            } else {
+                print_val_inline(mval);
+            }
+        }
+        printf("}");
         break;
     }
 }

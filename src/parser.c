@@ -410,6 +410,51 @@ static AgoNode *parse_prefix(AgoParser *p) {
         }
         return n;
     }
+    case AGO_TOKEN_LBRACE: {
+        /* Map literal: {"key": val, "key2": val2, ...} or {} */
+        AgoNode *n = node_new(p, AGO_NODE_MAP_LIT);
+        if (!n) return NULL;
+        const char *mkeys[128]; int mkey_lens[128];
+        AgoNode *mvals[128]; int mcount = 0;
+        skip_newlines(p);
+        if (!parser_check(p, AGO_TOKEN_RBRACE)) {
+            do {
+                skip_newlines(p);
+                if (mcount >= 128) {
+                    ago_error_set(p->ctx, AGO_ERR_SYNTAX,
+                                  ago_loc(p->lexer.file, p->current.line, p->current.column),
+                                  "too many map entries (max 128)");
+                    return NULL;
+                }
+                parser_expect(p, AGO_TOKEN_STRING, "expected string key in map literal");
+                if (ago_error_occurred(p->ctx)) return NULL;
+                /* Strip quotes from key */
+                mkeys[mcount] = p->previous.start + 1;
+                mkey_lens[mcount] = p->previous.length - 2;
+                parser_expect(p, AGO_TOKEN_COLON, "expected ':' after map key");
+                if (ago_error_occurred(p->ctx)) return NULL;
+                mvals[mcount] = parse_expression(p, PREC_NONE);
+                if (ago_error_occurred(p->ctx)) return NULL;
+                mcount++;
+                skip_newlines(p);
+            } while (parser_match(p, AGO_TOKEN_COMMA));
+        }
+        parser_expect(p, AGO_TOKEN_RBRACE, "expected '}'");
+        n->as.map_lit.count = mcount;
+        if (mcount > 0) {
+            n->as.map_lit.keys = ago_arena_alloc(p->arena, sizeof(char *) * (size_t)mcount);
+            n->as.map_lit.key_lengths = ago_arena_alloc(p->arena, sizeof(int) * (size_t)mcount);
+            n->as.map_lit.values = ago_arena_alloc(p->arena, sizeof(AgoNode *) * (size_t)mcount);
+            memcpy(n->as.map_lit.keys, mkeys, sizeof(char *) * (size_t)mcount);
+            memcpy(n->as.map_lit.key_lengths, mkey_lens, sizeof(int) * (size_t)mcount);
+            memcpy(n->as.map_lit.values, mvals, sizeof(AgoNode *) * (size_t)mcount);
+        } else {
+            n->as.map_lit.keys = NULL;
+            n->as.map_lit.key_lengths = NULL;
+            n->as.map_lit.values = NULL;
+        }
+        return n;
+    }
     case AGO_TOKEN_FN:      return parse_lambda(p);
     case AGO_TOKEN_OK:      return parse_result_wrap(p, AGO_NODE_RESULT_OK);
     case AGO_TOKEN_ERR:     return parse_result_wrap(p, AGO_NODE_RESULT_ERR);

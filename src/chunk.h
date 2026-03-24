@@ -60,6 +60,7 @@ typedef enum {
     AGO_OP_INDEX,          /* pop index + array, push element */
     AGO_OP_STRUCT,         /* 2B type_name_idx, 1B field_count */
     AGO_OP_GET_FIELD,      /* 2B field_name_idx -> pop struct, push field */
+    AGO_OP_MAP,            /* 2B count -> pop count key-value pairs, push map */
 
     /* Result types */
     AGO_OP_RESULT_OK,      /* pop value, push ok(value) */

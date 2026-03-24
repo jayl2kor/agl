@@ -33,8 +33,9 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
             int slen; str_content(arg, &slen);
             *out = val_int(slen); return true;
         }
+        if (arg.kind == VAL_MAP) { *out = val_int(arg.as.map->count); return true; }
         ago_error_set(interp->ctx, AGO_ERR_TYPE,
-                      ago_loc(NULL, line, col), "len() requires an array or string");
+                      ago_loc(NULL, line, col), "len() requires an array, string, or map");
         *out = val_nil(); return true;
     }
 
@@ -57,6 +58,7 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
         case VAL_ARRAY:  tname = "array"; break;
         case VAL_STRUCT: tname = "struct"; break;
         case VAL_RESULT: tname = "result"; break;
+        case VAL_MAP:    tname = "map"; break;
         case VAL_NIL:    tname = "nil"; break;
         default:         tname = "unknown"; break;
         }
@@ -84,6 +86,7 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
         case VAL_STRUCT: n = snprintf(buf, sizeof(buf), "<struct %.*s>", arg.as.strct->type_name_length, arg.as.strct->type_name); break;
         case VAL_RESULT: n = snprintf(buf, sizeof(buf), "%s(...)", arg.as.result->is_ok ? "ok" : "err"); break;
         case VAL_ARRAY:  n = snprintf(buf, sizeof(buf), "<array[%d]>", arg.as.array->count); break;
+        case VAL_MAP:    n = snprintf(buf, sizeof(buf), "<map[%d]>", arg.as.map->count); break;
         case VAL_STRING: {
             int slen; const char *sd = str_content(arg, &slen);
             char *copy = ago_arena_alloc(interp->arena, (size_t)slen);
@@ -451,6 +454,315 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
         if (f) { fclose(f); *out = val_bool(true); }
         else { *out = val_bool(false); }
         return true;
+    }
+
+    /* len() map support - add to existing len() above */
+
+    /* map_get(m, key) */
+    if (ago_str_eq(name, name_len, "map_get", 7)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_get() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal m = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal key = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (m.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_get() first argument must be a map"); *out = val_nil(); return true; }
+        if (key.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_get() key must be a string"); *out = val_nil(); return true; }
+        int klen; const char *kdata = str_content(key, &klen);
+        AgoMapVal *mp = m.as.map;
+        for (int i = 0; i < mp->count; i++) {
+            if (mp->key_lengths[i] == klen && memcmp(mp->keys[i], kdata, (size_t)klen) == 0) { *out = mp->values[i]; return true; }
+        }
+        *out = val_nil(); return true;
+    }
+
+    /* map_set(m, key, val) -> new map */
+    if (ago_str_eq(name, name_len, "map_set", 7)) {
+        if (argc != 3) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_set() takes exactly 3 arguments"); *out = val_nil(); return true; }
+        AgoVal m = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal key = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal val = eval_expr(interp, call_node->as.call.args[2]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (m.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_set() first argument must be a map"); *out = val_nil(); return true; }
+        if (key.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_set() key must be a string"); *out = val_nil(); return true; }
+        AgoMapVal *old = m.as.map;
+        int klen; const char *kdata = str_content(key, &klen);
+        int existing = -1;
+        for (int i = 0; i < old->count; i++) {
+            if (old->key_lengths[i] == klen && memcmp(old->keys[i], kdata, (size_t)klen) == 0) { existing = i; break; }
+        }
+        int new_count = existing >= 0 ? old->count : old->count + 1;
+        AgoMapVal *nm = ago_gc_alloc(interp->gc, sizeof(AgoMapVal), map_cleanup);
+        if (!nm) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        nm->count = new_count; nm->capacity = new_count;
+        nm->keys = malloc(sizeof(char *) * (size_t)new_count);
+        nm->key_lengths = malloc(sizeof(int) * (size_t)new_count);
+        nm->values = malloc(sizeof(AgoVal) * (size_t)new_count);
+        for (int i = 0; i < old->count; i++) { nm->keys[i] = old->keys[i]; nm->key_lengths[i] = old->key_lengths[i]; nm->values[i] = old->values[i]; }
+        if (existing >= 0) { nm->values[existing] = val; }
+        else { nm->keys[old->count] = kdata; nm->key_lengths[old->count] = klen; nm->values[old->count] = val; }
+        AgoVal v; v.kind = VAL_MAP; v.as.map = nm;
+        *out = v; return true;
+    }
+
+    /* map_keys(m) -> array */
+    if (ago_str_eq(name, name_len, "map_keys", 8)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_keys() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal m = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (m.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_keys() requires a map"); *out = val_nil(); return true; }
+        AgoMapVal *mp = m.as.map;
+        AgoArrayVal *arr = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
+        if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        arr->count = mp->count;
+        arr->elements = mp->count > 0 ? malloc(sizeof(AgoVal) * (size_t)mp->count) : NULL;
+        for (int i = 0; i < mp->count; i++) arr->elements[i] = val_string(mp->keys[i], mp->key_lengths[i]);
+        AgoVal v; v.kind = VAL_ARRAY; v.as.array = arr;
+        *out = v; return true;
+    }
+
+    /* map_has(m, key) -> bool */
+    if (ago_str_eq(name, name_len, "map_has", 7)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_has() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal m = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal key = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (m.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_has() first argument must be a map"); *out = val_nil(); return true; }
+        if (key.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_has() key must be a string"); *out = val_nil(); return true; }
+        int klen; const char *kdata = str_content(key, &klen);
+        AgoMapVal *mp = m.as.map;
+        for (int i = 0; i < mp->count; i++) {
+            if (mp->key_lengths[i] == klen && memcmp(mp->keys[i], kdata, (size_t)klen) == 0) { *out = val_bool(true); return true; }
+        }
+        *out = val_bool(false); return true;
+    }
+
+    /* map_del(m, key) -> new map */
+    if (ago_str_eq(name, name_len, "map_del", 7)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "map_del() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal m = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal key = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (m.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_del() first argument must be a map"); *out = val_nil(); return true; }
+        if (key.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "map_del() key must be a string"); *out = val_nil(); return true; }
+        AgoMapVal *old = m.as.map;
+        int klen; const char *kdata = str_content(key, &klen);
+        AgoMapVal *nm = ago_gc_alloc(interp->gc, sizeof(AgoMapVal), map_cleanup);
+        if (!nm) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        int new_count = 0;
+        nm->keys = old->count > 0 ? malloc(sizeof(char *) * (size_t)old->count) : NULL;
+        nm->key_lengths = old->count > 0 ? malloc(sizeof(int) * (size_t)old->count) : NULL;
+        nm->values = old->count > 0 ? malloc(sizeof(AgoVal) * (size_t)old->count) : NULL;
+        for (int i = 0; i < old->count; i++) {
+            if (old->key_lengths[i] == klen && memcmp(old->keys[i], kdata, (size_t)klen) == 0) continue;
+            nm->keys[new_count] = old->keys[i]; nm->key_lengths[new_count] = old->key_lengths[i]; nm->values[new_count] = old->values[i]; new_count++;
+        }
+        nm->count = new_count; nm->capacity = old->count;
+        AgoVal v; v.kind = VAL_MAP; v.as.map = nm;
+        *out = v; return true;
+    }
+
+    /* split(str, sep) -> array */
+    if (ago_str_eq(name, name_len, "split", 5)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "split() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal sepval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || sepval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "split() requires (string, string)"); *out = val_nil(); return true; }
+        int slen, seplen;
+        const char *sdata = str_content(sval, &slen);
+        const char *sepdata = str_content(sepval, &seplen);
+        AgoVal parts[256]; int pcount = 0;
+        int start = 0;
+        for (int i = 0; i <= slen - seplen; i++) {
+            if (memcmp(sdata + i, sepdata, (size_t)seplen) == 0) {
+                int plen = i - start;
+                char *p = ago_arena_alloc(interp->arena, (size_t)(plen > 0 ? plen : 1));
+                if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+                parts[pcount++] = val_string(p ? p : "", plen);
+                start = i + seplen; i = start - 1;
+            }
+        }
+        { int plen = slen - start;
+          char *p = ago_arena_alloc(interp->arena, (size_t)(plen > 0 ? plen : 1));
+          if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+          parts[pcount++] = val_string(p ? p : "", plen);
+        }
+        AgoArrayVal *arr = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
+        if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        arr->count = pcount; arr->elements = malloc(sizeof(AgoVal) * (size_t)pcount);
+        memcpy(arr->elements, parts, sizeof(AgoVal) * (size_t)pcount);
+        AgoVal v; v.kind = VAL_ARRAY; v.as.array = arr;
+        *out = v; return true;
+    }
+
+    /* trim(str) -> string */
+    if (ago_str_eq(name, name_len, "trim", 4)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "trim() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "trim() requires a string"); *out = val_nil(); return true; }
+        int slen; const char *sdata = str_content(sval, &slen);
+        int start = 0, end = slen;
+        while (start < end && (sdata[start] == ' ' || sdata[start] == '\t' || sdata[start] == '\n' || sdata[start] == '\r')) start++;
+        while (end > start && (sdata[end-1] == ' ' || sdata[end-1] == '\t' || sdata[end-1] == '\n' || sdata[end-1] == '\r')) end--;
+        int rlen = end - start;
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(rlen > 0 ? rlen : 1));
+        if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
+        *out = val_string(buf ? buf : "", rlen); return true;
+    }
+
+    /* contains(str, substr) -> bool */
+    if (ago_str_eq(name, name_len, "contains", 8)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "contains() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal subval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || subval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "contains() requires (string, string)"); *out = val_nil(); return true; }
+        int slen, sublen;
+        const char *sdata = str_content(sval, &slen);
+        const char *subdata = str_content(subval, &sublen);
+        if (sublen > slen) { *out = val_bool(false); return true; }
+        if (sublen == 0) { *out = val_bool(true); return true; }
+        for (int i = 0; i <= slen - sublen; i++) {
+            if (memcmp(sdata + i, subdata, (size_t)sublen) == 0) { *out = val_bool(true); return true; }
+        }
+        *out = val_bool(false); return true;
+    }
+
+    /* replace(str, old, new) -> string */
+    if (ago_str_eq(name, name_len, "replace", 7)) {
+        if (argc != 3) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "replace() takes exactly 3 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal oldval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal newval = eval_expr(interp, call_node->as.call.args[2]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || oldval.kind != VAL_STRING || newval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "replace() requires (string, string, string)"); *out = val_nil(); return true; }
+        int slen, oldlen, newlen;
+        const char *sdata = str_content(sval, &slen);
+        const char *olddata = str_content(oldval, &oldlen);
+        const char *newdata = str_content(newval, &newlen);
+        if (oldlen == 0) { char *buf = ago_arena_alloc(interp->arena, (size_t)slen); if (buf) memcpy(buf, sdata, (size_t)slen); *out = val_string(buf ? buf : sdata, slen); return true; }
+        int occ = 0;
+        for (int i = 0; i <= slen - oldlen; i++) { if (memcmp(sdata + i, olddata, (size_t)oldlen) == 0) { occ++; i += oldlen - 1; } }
+        int rlen = slen + occ * (newlen - oldlen);
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(rlen > 0 ? rlen : 1));
+        if (!buf) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        int wi = 0;
+        for (int i = 0; i < slen; ) {
+            if (i <= slen - oldlen && memcmp(sdata + i, olddata, (size_t)oldlen) == 0) { memcpy(buf + wi, newdata, (size_t)newlen); wi += newlen; i += oldlen; }
+            else { buf[wi++] = sdata[i++]; }
+        }
+        *out = val_string(buf, rlen); return true;
+    }
+
+    /* starts_with(str, prefix) -> bool */
+    if (ago_str_eq(name, name_len, "starts_with", 11)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "starts_with() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal pval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || pval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "starts_with() requires (string, string)"); *out = val_nil(); return true; }
+        int slen, plen;
+        const char *sdata = str_content(sval, &slen);
+        const char *pdata = str_content(pval, &plen);
+        *out = val_bool(slen >= plen && memcmp(sdata, pdata, (size_t)plen) == 0); return true;
+    }
+
+    /* ends_with(str, suffix) -> bool */
+    if (ago_str_eq(name, name_len, "ends_with", 9)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "ends_with() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal pval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || pval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "ends_with() requires (string, string)"); *out = val_nil(); return true; }
+        int slen, plen;
+        const char *sdata = str_content(sval, &slen);
+        const char *pdata = str_content(pval, &plen);
+        *out = val_bool(slen >= plen && memcmp(sdata + slen - plen, pdata, (size_t)plen) == 0); return true;
+    }
+
+    /* to_upper(str) -> string */
+    if (ago_str_eq(name, name_len, "to_upper", 8)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "to_upper() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "to_upper() requires a string"); *out = val_nil(); return true; }
+        int slen; const char *sdata = str_content(sval, &slen);
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(slen > 0 ? slen : 1));
+        if (!buf) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        for (int i = 0; i < slen; i++) buf[i] = (char)(sdata[i] >= 'a' && sdata[i] <= 'z' ? sdata[i] - 32 : sdata[i]);
+        *out = val_string(buf, slen); return true;
+    }
+
+    /* to_lower(str) -> string */
+    if (ago_str_eq(name, name_len, "to_lower", 8)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "to_lower() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "to_lower() requires a string"); *out = val_nil(); return true; }
+        int slen; const char *sdata = str_content(sval, &slen);
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(slen > 0 ? slen : 1));
+        if (!buf) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        for (int i = 0; i < slen; i++) buf[i] = (char)(sdata[i] >= 'A' && sdata[i] <= 'Z' ? sdata[i] + 32 : sdata[i]);
+        *out = val_string(buf, slen); return true;
+    }
+
+    /* join(arr, sep) -> string */
+    if (ago_str_eq(name, name_len, "join", 4)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "join() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal aval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal sepval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (aval.kind != VAL_ARRAY || sepval.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "join() requires (array, string)"); *out = val_nil(); return true; }
+        AgoArrayVal *arr = aval.as.array;
+        int seplen; const char *sepdata = str_content(sepval, &seplen);
+        int total = 0;
+        for (int i = 0; i < arr->count; i++) {
+            if (arr->elements[i].kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "join() array elements must be strings"); *out = val_nil(); return true; }
+            int elen; str_content(arr->elements[i], &elen); total += elen;
+            if (i > 0) total += seplen;
+        }
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(total > 0 ? total : 1));
+        int wi = 0;
+        for (int i = 0; i < arr->count; i++) {
+            if (i > 0 && seplen > 0) { memcpy(buf + wi, sepdata, (size_t)seplen); wi += seplen; }
+            int elen; const char *edata = str_content(arr->elements[i], &elen);
+            if (elen > 0) { memcpy(buf + wi, edata, (size_t)elen); wi += elen; }
+        }
+        *out = val_string(buf ? buf : "", total); return true;
+    }
+
+    /* substr(str, start, len) -> string */
+    if (ago_str_eq(name, name_len, "substr", 6)) {
+        if (argc != 3) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "substr() takes exactly 3 arguments"); *out = val_nil(); return true; }
+        AgoVal sval = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal startval = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal lenval = eval_expr(interp, call_node->as.call.args[2]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (sval.kind != VAL_STRING || startval.kind != VAL_INT || lenval.kind != VAL_INT) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "substr() requires (string, int, int)"); *out = val_nil(); return true; }
+        int slen; const char *sdata = str_content(sval, &slen);
+        int start = (int)startval.as.integer;
+        int rlen = (int)lenval.as.integer;
+        if (start < 0) start = 0;
+        if (start > slen) start = slen;
+        if (rlen < 0) rlen = 0;
+        if (start + rlen > slen) rlen = slen - start;
+        char *buf = ago_arena_alloc(interp->arena, (size_t)(rlen > 0 ? rlen : 1));
+        if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
+        *out = val_string(buf ? buf : "", rlen); return true;
     }
 
     return false;  /* not a builtin */

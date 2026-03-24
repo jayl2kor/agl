@@ -17,6 +17,7 @@ typedef enum {
     AGO_NODE_CALL,          /* foo(a, b) */
     AGO_NODE_INDEX,         /* arr[0] */
     AGO_NODE_ARRAY_LIT,     /* [1, 2, 3] */
+    AGO_NODE_MAP_LIT,       /* {"key": value, ...} */
     AGO_NODE_STRUCT_LIT,    /* Point { x: 1, y: 2 } */
     AGO_NODE_LAMBDA,        /* fn(x: int) -> int { ... } (anonymous function) */
     AGO_NODE_RESULT_OK,     /* ok(expr) */
@@ -89,6 +90,14 @@ struct AgoNode {
 
         /* AGO_NODE_ARRAY_LIT */
         struct { AgoNode **elements; int count; } array_lit;
+
+        /* AGO_NODE_MAP_LIT */
+        struct {
+            const char **keys;          /* arena-allocated */
+            int *key_lengths;
+            AgoNode **values;           /* arena-allocated */
+            int count;
+        } map_lit;
 
         /* AGO_NODE_STRUCT_LIT */
         struct {
