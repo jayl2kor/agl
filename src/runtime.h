@@ -120,6 +120,15 @@ static inline AgoVal val_string(const char *s, int len) {
     v.as.string.length = len;
     return v;
 }
+static inline AgoVal val_array(AgoArrayVal *a) {
+    AgoVal v; v.kind = VAL_ARRAY; v.as.array = a; return v;
+}
+static inline AgoVal val_map(AgoMapVal *m) {
+    AgoVal v; v.kind = VAL_MAP; v.as.map = m; return v;
+}
+static inline AgoVal val_result(AgoResultVal *r) {
+    AgoVal v; v.kind = VAL_RESULT; v.as.result = r; return v;
+}
 
 /* ---- Environment (variable bindings) ---- */
 

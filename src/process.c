@@ -98,10 +98,19 @@ AgoVal ago_exec(const char *cmd, int cmd_len,
     /* Create pipes for stdout and stderr */
     int stdout_pipe[2];
     int stderr_pipe[2];
-    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+    if (pipe(stdout_pipe) != 0) {
         for (int i = 0; i < argc; i++) free(argv[i + 1]);
-        free(argv);
-        free(cmd_z);
+        free(argv); free(cmd_z);
+        AgoResultVal *rv = ago_gc_alloc(gc, sizeof(AgoResultVal), NULL);
+        if (!rv) return val_nil();
+        rv->is_ok = false;
+        rv->value = val_string("failed to create pipes", 22);
+        return (AgoVal){VAL_RESULT, {.result = rv}};
+    }
+    if (pipe(stderr_pipe) != 0) {
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        for (int i = 0; i < argc; i++) free(argv[i + 1]);
+        free(argv); free(cmd_z);
         AgoResultVal *rv = ago_gc_alloc(gc, sizeof(AgoResultVal), NULL);
         if (!rv) return val_nil();
         rv->is_ok = false;

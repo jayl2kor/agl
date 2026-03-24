@@ -580,9 +580,14 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
         int slen, seplen;
         const char *sdata = str_content(sval, &slen);
         const char *sepdata = str_content(sepval, &seplen);
+        if (seplen == 0) {
+            ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col),
+                          "split() separator cannot be empty");
+            *out = val_nil(); return true;
+        }
         AgoVal parts[256]; int pcount = 0;
         int start = 0;
-        for (int i = 0; i <= slen - seplen; i++) {
+        for (int i = 0; i <= slen - seplen && pcount < 255; i++) {
             if (memcmp(sdata + i, sepdata, (size_t)seplen) == 0) {
                 int plen = i - start;
                 char *p = ago_arena_alloc(interp->arena, (size_t)(plen > 0 ? plen : 1));
@@ -591,10 +596,11 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
                 start = i + seplen; i = start - 1;
             }
         }
-        { int plen = slen - start;
-          char *p = ago_arena_alloc(interp->arena, (size_t)(plen > 0 ? plen : 1));
-          if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
-          parts[pcount++] = val_string(p ? p : "", plen);
+        if (pcount < 256) {
+            int plen = slen - start;
+            char *p = ago_arena_alloc(interp->arena, (size_t)(plen > 0 ? plen : 1));
+            if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+            parts[pcount++] = val_string(p ? p : "", plen);
         }
         AgoArrayVal *arr = ago_gc_alloc(interp->gc, sizeof(AgoArrayVal), array_cleanup);
         if (!arr) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }

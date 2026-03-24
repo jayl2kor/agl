@@ -54,6 +54,11 @@ static void vm_push(Vm *vm, AgoVal val) {
 }
 
 static AgoVal vm_pop(Vm *vm) {
+    if (vm->stack_top <= 0) {
+        ago_error_set(vm->ctx, AGO_ERR_RUNTIME,
+                      ago_loc(NULL, vm->current_line, 0), "stack underflow");
+        return val_nil();
+    }
     return vm->stack[--vm->stack_top];
 }
 
@@ -431,9 +436,15 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
           const char *sdata = str_content(args[0], &slen);
           const char *sepdata = str_content(args[1], &seplen);
           /* Count parts and build array */
+          /* Guard: empty separator would cause infinite loop */
+          if (seplen == 0) {
+              ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col),
+                            "split() separator cannot be empty");
+              return val_nil();
+          }
           AgoVal parts[256]; int pcount = 0;
           int start = 0;
-          for (int i = 0; i <= slen - seplen; i++) {
+          for (int i = 0; i <= slen - seplen && pcount < 255; i++) {
               if (memcmp(sdata + i, sepdata, (size_t)seplen) == 0) {
                   int plen = i - start;
                   char *p = ago_arena_alloc(vm->arena, (size_t)(plen > 0 ? plen : 1));
@@ -444,10 +455,11 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
               }
           }
           /* Last part */
-          { int plen = slen - start;
-            char *p = ago_arena_alloc(vm->arena, (size_t)(plen > 0 ? plen : 1));
-            if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
-            parts[pcount++] = val_string(p ? p : "", plen);
+          if (pcount < 256) {
+              int plen = slen - start;
+              char *p = ago_arena_alloc(vm->arena, (size_t)(plen > 0 ? plen : 1));
+              if (p && plen > 0) memcpy(p, sdata + start, (size_t)plen);
+              parts[pcount++] = val_string(p ? p : "", plen);
           }
           AgoArrayVal *arr = ago_gc_alloc(vm->gc, sizeof(AgoArrayVal), array_cleanup);
           if (!arr) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
@@ -1045,11 +1057,7 @@ static int vm_execute(Vm *vm, AgoChunk *chunk) {
             uint8_t argc = *ip++;
             AgoVal callee = vm->stack[vm->stack_top - 1 - argc];
             if (callee.kind != VAL_FN) {
-                if (callee.kind == VAL_NIL || callee.kind == VAL_INT || callee.kind == VAL_STRING) {
-                    ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "expression is not callable");
-                } else {
-                    ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "expression is not callable");
-                }
+                ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, vm->current_line, 0), "expression is not callable");
                 return -1;
             }
             AgoFnVal *fn = callee.as.fn;
@@ -1409,7 +1417,6 @@ int ago_vm_run(AgoChunk *chunk, const char *filename, AgoCtx *ctx) {
 
     ctx->trace_cb = NULL;
     ctx->trace_data = NULL;
-    ago_gc_free(gc);
     /* Free module cache */
     for (int i = 0; i < vm.module_count; i++) {
         free(vm.modules[i].path);
