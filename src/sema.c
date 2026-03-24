@@ -392,6 +392,14 @@ bool ago_sema_check(AgoSema *sema, AgoNode *program) {
     /* Environment variable builtins */
     scope_define(sema->scope, "env", 3, false, true, 1);
     scope_define(sema->scope, "env_default", 11, false, true, 2);
+    /* HTTP builtins */
+    scope_define(sema->scope, "http_get", 8, false, true, 2);
+    scope_define(sema->scope, "http_post", 9, false, true, 3);
+    /* Process execution */
+    scope_define(sema->scope, "exec", 4, false, true, 2);
+    /* Time functions */
+    scope_define(sema->scope, "now", 3, false, true, 0);  /* variadic-like: 0 args */
+    scope_define(sema->scope, "sleep", 5, false, true, 1);
 
     /* Check all top-level declarations/statements */
     for (int i = 0; i < program->as.program.decl_count; i++) {

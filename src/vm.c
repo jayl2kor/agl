@@ -5,6 +5,9 @@
 #include "parser.h"
 #include "sema.h"
 #include "json.h"
+#include "http.h"
+#include "process.h"
+#include "time_funcs.h"
 
 /* ---- VM state ---- */
 
@@ -646,6 +649,42 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
               return val_string(copy ? copy : "", copy ? flen : 0);
           }
         }
+
+    case 35: /* http_get */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "http_get() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_get() first argument must be a string URL"); return val_nil(); }
+        if (args[1].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_get() second argument must be a map of headers"); return val_nil(); }
+        { int slen; const char *sd = str_content(args[0], &slen);
+          return ago_http_request("GET", sd, slen, args[1].as.map, NULL, 0, vm->arena, vm->gc);
+        }
+
+    case 36: /* http_post */
+        if (argc != 3) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "http_post() takes exactly 3 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() first argument must be a string URL"); return val_nil(); }
+        if (args[1].kind != VAL_MAP) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() second argument must be a map of headers"); return val_nil(); }
+        if (args[2].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() third argument must be a string body"); return val_nil(); }
+        { int ulen; const char *ud = str_content(args[0], &ulen);
+          int blen; const char *bd = str_content(args[2], &blen);
+          return ago_http_request("POST", ud, ulen, args[1].as.map, bd, blen, vm->arena, vm->gc);
+        }
+
+    case 37: /* exec */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "exec() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "exec() first argument must be a string command"); return val_nil(); }
+        if (args[1].kind != VAL_ARRAY) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "exec() second argument must be an array of arguments"); return val_nil(); }
+        { int clen; const char *cd = str_content(args[0], &clen);
+          return ago_exec(cd, clen, args[1].as.array, vm->arena, vm->gc);
+        }
+
+    case 38: /* now */
+        if (argc != 0) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "now() takes no arguments"); return val_nil(); }
+        return val_int(ago_now_ms());
+
+    case 39: /* sleep */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "sleep() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_INT) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "sleep() requires an integer (milliseconds)"); return val_nil(); }
+        ago_sleep_ms(args[0].as.integer);
+        return val_nil();
 
     default:
         ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "unknown builtin %d", builtin_id);

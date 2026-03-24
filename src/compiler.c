@@ -43,6 +43,14 @@ typedef enum {
     /* Environment variable builtins */
     AGO_BUILTIN_ENV,
     AGO_BUILTIN_ENV_DEFAULT,
+    /* HTTP builtins */
+    AGO_BUILTIN_HTTP_GET,
+    AGO_BUILTIN_HTTP_POST,
+    /* Process execution */
+    AGO_BUILTIN_EXEC,
+    /* Time functions */
+    AGO_BUILTIN_NOW,
+    AGO_BUILTIN_SLEEP,
     AGO_BUILTIN_NONE = -1,
 } AgoBuiltinId;
 
@@ -81,6 +89,11 @@ static AgoBuiltinId resolve_builtin(const char *name, int len) {
     if (ago_str_eq(name, len, "json_stringify", 14)) return AGO_BUILTIN_JSON_STRINGIFY;
     if (ago_str_eq(name, len, "env", 3)) return AGO_BUILTIN_ENV;
     if (ago_str_eq(name, len, "env_default", 11)) return AGO_BUILTIN_ENV_DEFAULT;
+    if (ago_str_eq(name, len, "http_get", 8)) return AGO_BUILTIN_HTTP_GET;
+    if (ago_str_eq(name, len, "http_post", 9)) return AGO_BUILTIN_HTTP_POST;
+    if (ago_str_eq(name, len, "exec", 4)) return AGO_BUILTIN_EXEC;
+    if (ago_str_eq(name, len, "now", 3)) return AGO_BUILTIN_NOW;
+    if (ago_str_eq(name, len, "sleep", 5)) return AGO_BUILTIN_SLEEP;
     if (ago_str_eq(name, len, "ok", 2)) return AGO_BUILTIN_NONE;
     if (ago_str_eq(name, len, "err", 3)) return AGO_BUILTIN_NONE;
     return AGO_BUILTIN_NONE;

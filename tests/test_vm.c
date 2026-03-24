@@ -413,6 +413,115 @@ AGO_TEST(test_vm_env_default) {
     AGO_ASSERT_STR_EQ(ctx, captured_output, "fallback\n");
 }
 
+/* ---- exec tests ---- */
+
+AGO_TEST(test_vm_exec) {
+    int r = vm_run_and_capture(
+        "let result = exec(\"echo\", [\"hello ago\"])\n"
+        "let out = match result {\n"
+        "    ok(r) -> r[\"stdout\"]\n"
+        "    err(e) -> e\n"
+        "}\n"
+        "print(trim(out))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "hello ago\n");
+}
+
+AGO_TEST(test_vm_exec_status) {
+    int r = vm_run_and_capture(
+        "let result = exec(\"test\", [\"-f\", \"/nonexistent\"])\n"
+        "let status = match result {\n"
+        "    ok(r) -> r[\"status\"]\n"
+        "    err(e) -> -1\n"
+        "}\n"
+        "print(status != 0)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_exec_stderr) {
+    int r = vm_run_and_capture(
+        "let result = exec(\"ls\", [\"/nonexistent_path_12345\"])\n"
+        "let has_stderr = match result {\n"
+        "    ok(r) -> len(r[\"stderr\"]) > 0\n"
+        "    err(e) -> false\n"
+        "}\n"
+        "print(has_stderr)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_exec_result_type) {
+    int r = vm_run_and_capture(
+        "let result = exec(\"echo\", [\"test\"])\n"
+        "print(type(result))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "result\n");
+}
+
+/* ---- time tests ---- */
+
+AGO_TEST(test_vm_now) {
+    int r = vm_run_and_capture(
+        "let t = now()\n"
+        "print(t > 0)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_sleep) {
+    int r = vm_run_and_capture(
+        "let t1 = now()\n"
+        "sleep(10)\n"
+        "let t2 = now()\n"
+        "print(t2 >= t1)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "true\n");
+}
+
+AGO_TEST(test_vm_now_type) {
+    int r = vm_run_and_capture(
+        "print(type(now()))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "int\n");
+}
+
+/* ---- HTTP tests ---- */
+
+AGO_TEST(test_vm_http_get) {
+    /* Test that http_get returns a result type, even on connection failure.
+     * Use a non-routable address to avoid hanging on real network. */
+    int r = vm_run_and_capture(
+        "let result = http_get(\"http://127.0.0.1:1/test\", {})\n"
+        "let t = type(result)\n"
+        "print(t)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "result\n");
+}
+
+AGO_TEST(test_vm_http_get_error) {
+    /* Test that a failed http_get returns an err Result */
+    int r = vm_run_and_capture(
+        "let result = http_get(\"http://127.0.0.1:1/test\", {})\n"
+        "let msg = match result {\n"
+        "    ok(r) -> \"ok\"\n"
+        "    err(e) -> \"err\"\n"
+        "}\n"
+        "print(msg)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "err\n");
+}
+
+AGO_TEST(test_vm_http_post) {
+    /* Test that http_post returns a result type */
+    int r = vm_run_and_capture(
+        "let result = http_post(\"http://127.0.0.1:1/test\", {}, \"body\")\n"
+        "let t = type(result)\n"
+        "print(t)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "result\n");
+}
+
 int main(void) {
     AgoTestCtx ctx = {0, 0};
     printf("\n=== VM Tests ===\n");
@@ -465,6 +574,22 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_vm_json_parse_error);
     AGO_RUN_TEST(&ctx, test_vm_env);
     AGO_RUN_TEST(&ctx, test_vm_env_default);
+
+    /* Process execution tests */
+    AGO_RUN_TEST(&ctx, test_vm_exec);
+    AGO_RUN_TEST(&ctx, test_vm_exec_status);
+    AGO_RUN_TEST(&ctx, test_vm_exec_stderr);
+    AGO_RUN_TEST(&ctx, test_vm_exec_result_type);
+
+    /* Time tests */
+    AGO_RUN_TEST(&ctx, test_vm_now);
+    AGO_RUN_TEST(&ctx, test_vm_sleep);
+    AGO_RUN_TEST(&ctx, test_vm_now_type);
+
+    /* HTTP tests */
+    AGO_RUN_TEST(&ctx, test_vm_http_get);
+    AGO_RUN_TEST(&ctx, test_vm_http_get_error);
+    AGO_RUN_TEST(&ctx, test_vm_http_post);
 
     AGO_SUMMARY(&ctx);
 }

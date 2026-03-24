@@ -3,6 +3,16 @@ CFLAGS  = -std=c11 -Wall -Wextra -Werror -pedantic
 CFLAGS_DEBUG = $(CFLAGS) -g3 -fsanitize=address,undefined -DAGO_DEBUG
 DEPFLAGS = -MMD -MP
 
+# Detect libcurl
+CURL_AVAILABLE := $(shell curl-config --libs >/dev/null 2>&1 && echo yes || echo no)
+ifeq ($(CURL_AVAILABLE),yes)
+  CURL_CFLAGS  = -DAGO_HAS_CURL
+  CURL_LDFLAGS = -lcurl
+else
+  CURL_CFLAGS  =
+  CURL_LDFLAGS =
+endif
+
 LIB_SRC = $(filter-out src/main.c, $(wildcard src/*.c))
 OBJ     = $(LIB_SRC:.c=.o)
 DEPS    = $(OBJ:.o=.d) src/main.d
@@ -10,13 +20,13 @@ DEPS    = $(OBJ:.o=.d) src/main.d
 all: ago
 
 ago: $(OBJ) src/main.o
-	$(CC) $(CFLAGS_DEBUG) -o $@ $^
+	$(CC) $(CFLAGS_DEBUG) -o $@ $^ $(CURL_LDFLAGS)
 
 src/%.o: src/%.c
-	$(CC) $(CFLAGS_DEBUG) $(DEPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS_DEBUG) $(CURL_CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 tests/test_%: tests/test_%.c $(OBJ)
-	$(CC) $(CFLAGS_DEBUG) -Isrc -o $@ $^
+	$(CC) $(CFLAGS_DEBUG) $(CURL_CFLAGS) -Isrc -o $@ $^ $(CURL_LDFLAGS)
 
 test: tests/test_lexer tests/test_parser tests/test_sema tests/test_interpreter tests/test_gc tests/test_vm
 	@for t in $^; do echo ""; ./$$t || exit 1; done

@@ -1,5 +1,8 @@
 #include "runtime.h"
 #include "json.h"
+#include "http.h"
+#include "process.h"
+#include "time_funcs.h"
 
 /* ---- Built-in function dispatch ---- */
 
@@ -840,6 +843,70 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
             if (copy) memcpy(copy, fdata, (size_t)flen);
             *out = val_string(copy ? copy : "", copy ? flen : 0);
         }
+        return true;
+    }
+
+    /* http_get(url, headers) -> Result<map, string> */
+    if (ago_str_eq(name, name_len, "http_get", 8)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "http_get() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal url_val = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal hdr_val = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (url_val.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_get() first argument must be a string URL"); *out = val_nil(); return true; }
+        if (hdr_val.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_get() second argument must be a map of headers"); *out = val_nil(); return true; }
+        int slen; const char *sd = str_content(url_val, &slen);
+        *out = ago_http_request("GET", sd, slen, hdr_val.as.map, NULL, 0, interp->arena, interp->gc);
+        return true;
+    }
+
+    /* http_post(url, headers, body) -> Result<map, string> */
+    if (ago_str_eq(name, name_len, "http_post", 9)) {
+        if (argc != 3) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "http_post() takes exactly 3 arguments"); *out = val_nil(); return true; }
+        AgoVal url_val = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal hdr_val = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal body_val = eval_expr(interp, call_node->as.call.args[2]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (url_val.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() first argument must be a string URL"); *out = val_nil(); return true; }
+        if (hdr_val.kind != VAL_MAP) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() second argument must be a map of headers"); *out = val_nil(); return true; }
+        if (body_val.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "http_post() third argument must be a string body"); *out = val_nil(); return true; }
+        int ulen; const char *ud = str_content(url_val, &ulen);
+        int blen; const char *bd = str_content(body_val, &blen);
+        *out = ago_http_request("POST", ud, ulen, hdr_val.as.map, bd, blen, interp->arena, interp->gc);
+        return true;
+    }
+
+    /* exec(cmd, args) -> Result<map, string> */
+    if (ago_str_eq(name, name_len, "exec", 4)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "exec() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal cmd_val = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal args_val = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (cmd_val.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "exec() first argument must be a string command"); *out = val_nil(); return true; }
+        if (args_val.kind != VAL_ARRAY) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "exec() second argument must be an array of arguments"); *out = val_nil(); return true; }
+        int clen; const char *cd = str_content(cmd_val, &clen);
+        *out = ago_exec(cd, clen, args_val.as.array, interp->arena, interp->gc);
+        return true;
+    }
+
+    /* now() -> int (milliseconds since Unix epoch) */
+    if (ago_str_eq(name, name_len, "now", 3)) {
+        if (argc != 0) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "now() takes no arguments"); *out = val_nil(); return true; }
+        *out = val_int(ago_now_ms());
+        return true;
+    }
+
+    /* sleep(ms) -> nil */
+    if (ago_str_eq(name, name_len, "sleep", 5)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "sleep() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal ms_val = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (ms_val.kind != VAL_INT) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "sleep() requires an integer (milliseconds)"); *out = val_nil(); return true; }
+        ago_sleep_ms(ms_val.as.integer);
+        *out = val_nil();
         return true;
     }
 
