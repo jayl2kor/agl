@@ -7,8 +7,11 @@ ago
 # Test binaries
 tests/test_lexer
 tests/test_parser
+tests/test_sema
 tests/test_typechecker
 tests/test_interpreter
+tests/test_gc
+tests/test_vm
 tests/test_integration
 
 # OS
