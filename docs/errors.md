@@ -1,4 +1,10 @@
-# Agl Error Catalog
+---
+layout: default
+title: Error Catalog
+nav_order: 5
+---
+
+# AGL Error Catalog
 
 ## Error Output Format
 

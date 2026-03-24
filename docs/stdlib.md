@@ -1,4 +1,10 @@
-# Agl Standard Library Reference
+---
+layout: default
+title: Standard Library
+nav_order: 4
+---
+
+# AGL Standard Library Reference
 
 ## 1. I/O
 

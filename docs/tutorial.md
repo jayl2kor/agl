@@ -1,4 +1,10 @@
-# Getting Started with Ago
+---
+layout: default
+title: Getting Started
+nav_order: 2
+---
+
+# Getting Started with AGL
 
 Agl is a medium-level programming language designed for AI agents. This tutorial
 walks you through the basics, from building the interpreter to writing real programs.

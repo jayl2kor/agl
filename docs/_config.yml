@@ -1,0 +1,22 @@
+title: AGL Documentation
+description: A programming language designed for AI agents
+theme: just-the-docs
+url: "https://jayl2kor.github.io/ago"
+baseurl: "/ago"
+
+color_scheme: dark
+
+nav_order: 1
+
+aux_links:
+  "GitHub":
+    - "https://github.com/jayl2kor/ago"
+
+footer_content: "AGL &mdash; Agent Language. MIT License."
+
+search_enabled: true
+
+heading_anchors: true
+
+back_to_top: true
+back_to_top_text: "Back to top"

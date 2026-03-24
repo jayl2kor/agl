@@ -1,4 +1,10 @@
-# Agl Language Specification
+---
+layout: default
+title: Language Specification
+nav_order: 3
+---
+
+# AGL Language Specification
 
 ## 1. Lexical Elements
 
