@@ -1,6 +1,6 @@
 title: AGL Documentation
 description: A programming language designed for AI agents
-theme: just-the-docs
+remote_theme: just-the-docs/just-the-docs
 url: "https://jayl2kor.github.io/ago"
 baseurl: "/ago"
 
