@@ -37,6 +37,12 @@ typedef enum {
     AGO_BUILTIN_JOIN,
     AGO_BUILTIN_SUBSTR,
     AGO_BUILTIN_COUNT,
+    /* JSON builtins */
+    AGO_BUILTIN_JSON_PARSE,
+    AGO_BUILTIN_JSON_STRINGIFY,
+    /* Environment variable builtins */
+    AGO_BUILTIN_ENV,
+    AGO_BUILTIN_ENV_DEFAULT,
     AGO_BUILTIN_NONE = -1,
 } AgoBuiltinId;
 
@@ -71,6 +77,10 @@ static AgoBuiltinId resolve_builtin(const char *name, int len) {
     if (ago_str_eq(name, len, "to_lower", 8)) return AGO_BUILTIN_TO_LOWER;
     if (ago_str_eq(name, len, "join", 4)) return AGO_BUILTIN_JOIN;
     if (ago_str_eq(name, len, "substr", 6)) return AGO_BUILTIN_SUBSTR;
+    if (ago_str_eq(name, len, "json_parse", 10)) return AGO_BUILTIN_JSON_PARSE;
+    if (ago_str_eq(name, len, "json_stringify", 14)) return AGO_BUILTIN_JSON_STRINGIFY;
+    if (ago_str_eq(name, len, "env", 3)) return AGO_BUILTIN_ENV;
+    if (ago_str_eq(name, len, "env_default", 11)) return AGO_BUILTIN_ENV_DEFAULT;
     if (ago_str_eq(name, len, "ok", 2)) return AGO_BUILTIN_NONE;
     if (ago_str_eq(name, len, "err", 3)) return AGO_BUILTIN_NONE;
     return AGO_BUILTIN_NONE;

@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "json.h"
 
 /* ---- Built-in function dispatch ---- */
 
@@ -763,6 +764,83 @@ bool try_builtin_call(AgoInterp *interp, const char *name, int name_len,
         char *buf = ago_arena_alloc(interp->arena, (size_t)(rlen > 0 ? rlen : 1));
         if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
         *out = val_string(buf ? buf : "", rlen); return true;
+    }
+
+    /* json_parse(str) -> Result<value, string> */
+    if (ago_str_eq(name, name_len, "json_parse", 10)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "json_parse() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal arg = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (arg.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "json_parse() requires a string"); *out = val_nil(); return true; }
+        int slen; const char *sd = str_content(arg, &slen);
+        *out = ago_json_parse(sd, slen, interp->arena, interp->gc);
+        return true;
+    }
+
+    /* json_stringify(val) -> string */
+    if (ago_str_eq(name, name_len, "json_stringify", 14)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "json_stringify() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal arg = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        int out_len;
+        const char *s = ago_json_stringify(arg, &out_len, interp->arena);
+        *out = val_string(s, out_len);
+        return true;
+    }
+
+    /* env(name) -> Result<string, string> */
+    if (ago_str_eq(name, name_len, "env", 3)) {
+        if (argc != 1) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "env() takes exactly 1 argument"); *out = val_nil(); return true; }
+        AgoVal arg = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (arg.kind != VAL_STRING) { ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "env() requires a string"); *out = val_nil(); return true; }
+        int slen; const char *sd = str_content(arg, &slen);
+        char tmp[256]; if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+        memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+        const char *val = getenv(tmp);
+        AgoResultVal *rv = ago_gc_alloc(interp->gc, sizeof(AgoResultVal), NULL);
+        if (!rv) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); *out = val_nil(); return true; }
+        if (val) {
+            int vlen = (int)strlen(val);
+            char *copy = ago_arena_alloc(interp->arena, (size_t)vlen);
+            if (copy) memcpy(copy, val, (size_t)vlen);
+            rv->is_ok = true;
+            rv->value = val_string(copy ? copy : "", copy ? vlen : 0);
+        } else {
+            rv->is_ok = false;
+            rv->value = val_string("not set", 7);
+        }
+        AgoVal v; v.kind = VAL_RESULT; v.as.result = rv;
+        *out = v; return true;
+    }
+
+    /* env_default(name, fallback) -> string */
+    if (ago_str_eq(name, name_len, "env_default", 11)) {
+        if (argc != 2) { ago_error_set(interp->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "env_default() takes exactly 2 arguments"); *out = val_nil(); return true; }
+        AgoVal name_arg = eval_expr(interp, call_node->as.call.args[0]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        AgoVal fallback_arg = eval_expr(interp, call_node->as.call.args[1]);
+        if (ago_error_occurred(interp->ctx)) { *out = val_nil(); return true; }
+        if (name_arg.kind != VAL_STRING || fallback_arg.kind != VAL_STRING) {
+            ago_error_set(interp->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "env_default() requires (string, string)");
+            *out = val_nil(); return true;
+        }
+        int slen; const char *sd = str_content(name_arg, &slen);
+        char tmp[256]; if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+        memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+        const char *val = getenv(tmp);
+        if (val) {
+            int vlen = (int)strlen(val);
+            char *copy = ago_arena_alloc(interp->arena, (size_t)vlen);
+            if (copy) memcpy(copy, val, (size_t)vlen);
+            *out = val_string(copy ? copy : "", copy ? vlen : 0);
+        } else {
+            int flen; const char *fdata = str_content(fallback_arg, &flen);
+            char *copy = ago_arena_alloc(interp->arena, (size_t)flen);
+            if (copy) memcpy(copy, fdata, (size_t)flen);
+            *out = val_string(copy ? copy : "", copy ? flen : 0);
+        }
+        return true;
     }
 
     return false;  /* not a builtin */

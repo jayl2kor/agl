@@ -386,6 +386,12 @@ bool ago_sema_check(AgoSema *sema, AgoNode *program) {
     scope_define(sema->scope, "to_lower", 8, false, true, 1);
     scope_define(sema->scope, "join", 4, false, true, 2);
     scope_define(sema->scope, "substr", 6, false, true, 3);
+    /* JSON builtins */
+    scope_define(sema->scope, "json_parse", 10, false, true, 1);
+    scope_define(sema->scope, "json_stringify", 14, false, true, 1);
+    /* Environment variable builtins */
+    scope_define(sema->scope, "env", 3, false, true, 1);
+    scope_define(sema->scope, "env_default", 11, false, true, 2);
 
     /* Check all top-level declarations/statements */
     for (int i = 0; i < program->as.program.decl_count; i++) {

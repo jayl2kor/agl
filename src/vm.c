@@ -4,6 +4,7 @@
 #include "compiler.h"
 #include "parser.h"
 #include "sema.h"
+#include "json.h"
 
 /* ---- VM state ---- */
 
@@ -588,6 +589,62 @@ static AgoVal vm_call_builtin(Vm *vm, int builtin_id, AgoVal *args, int argc) {
           char *buf = ago_arena_alloc(vm->arena, (size_t)(rlen > 0 ? rlen : 1));
           if (buf && rlen > 0) memcpy(buf, sdata + start, (size_t)rlen);
           return val_string(buf ? buf : "", rlen);
+        }
+
+    case 31: /* json_parse */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "json_parse() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "json_parse() requires a string"); return val_nil(); }
+        { int slen; const char *sd = str_content(args[0], &slen);
+          return ago_json_parse(sd, slen, vm->arena, vm->gc);
+        }
+
+    case 32: /* json_stringify */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "json_stringify() takes exactly 1 argument"); return val_nil(); }
+        { int out_len;
+          const char *s = ago_json_stringify(args[0], &out_len, vm->arena);
+          return val_string(s, out_len);
+        }
+
+    case 33: /* env */
+        if (argc != 1) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "env() takes exactly 1 argument"); return val_nil(); }
+        if (args[0].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "env() requires a string"); return val_nil(); }
+        { int slen; const char *sd = str_content(args[0], &slen);
+          char tmp[256]; if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+          memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+          const char *val = getenv(tmp);
+          AgoResultVal *rv = ago_gc_alloc(vm->gc, sizeof(AgoResultVal), NULL);
+          if (!rv) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "out of memory"); return val_nil(); }
+          if (val) {
+              int vlen = (int)strlen(val);
+              char *copy = ago_arena_alloc(vm->arena, (size_t)vlen);
+              if (copy) memcpy(copy, val, (size_t)vlen);
+              rv->is_ok = true;
+              rv->value = val_string(copy ? copy : "", copy ? vlen : 0);
+          } else {
+              rv->is_ok = false;
+              rv->value = val_string("not set", 7);
+          }
+          AgoVal v; v.kind = VAL_RESULT; v.as.result = rv; return v;
+        }
+
+    case 34: /* env_default */
+        if (argc != 2) { ago_error_set(vm->ctx, AGO_ERR_RUNTIME, ago_loc(NULL, line, col), "env_default() takes exactly 2 arguments"); return val_nil(); }
+        if (args[0].kind != VAL_STRING || args[1].kind != VAL_STRING) { ago_error_set(vm->ctx, AGO_ERR_TYPE, ago_loc(NULL, line, col), "env_default() requires (string, string)"); return val_nil(); }
+        { int slen; const char *sd = str_content(args[0], &slen);
+          char tmp[256]; if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+          memcpy(tmp, sd, (size_t)slen); tmp[slen] = '\0';
+          const char *val = getenv(tmp);
+          if (val) {
+              int vlen = (int)strlen(val);
+              char *copy = ago_arena_alloc(vm->arena, (size_t)vlen);
+              if (copy) memcpy(copy, val, (size_t)vlen);
+              return val_string(copy ? copy : "", copy ? vlen : 0);
+          } else {
+              int flen; const char *fdata = str_content(args[1], &flen);
+              char *copy = ago_arena_alloc(vm->arena, (size_t)flen);
+              if (copy) memcpy(copy, fdata, (size_t)flen);
+              return val_string(copy ? copy : "", copy ? flen : 0);
+          }
         }
 
     default:

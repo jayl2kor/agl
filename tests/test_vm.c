@@ -324,6 +324,95 @@ AGO_TEST(test_vm_substr) {
 
 /* ---- Main ---- */
 
+/* ---- JSON & env tests ---- */
+
+AGO_TEST(test_vm_json_parse_object) {
+    int r = vm_run_and_capture(
+        "let data = match json_parse(\"{\\\"name\\\": \\\"ago\\\", \\\"version\\\": 1}\") {\n"
+        "    ok(d) -> d\n"
+        "    err(e) -> {}\n"
+        "}\n"
+        "print(data[\"name\"])\n"
+        "print(data[\"version\"])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "ago\n1\n");
+}
+
+AGO_TEST(test_vm_json_parse_array) {
+    int r = vm_run_and_capture(
+        "let arr = match json_parse(\"[1, 2, 3]\") {\n"
+        "    ok(d) -> d\n"
+        "    err(e) -> []\n"
+        "}\n"
+        "print(arr)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "[1, 2, 3]\n");
+}
+
+AGO_TEST(test_vm_json_parse_nested) {
+    int r = vm_run_and_capture(
+        "let data = match json_parse(\"{\\\"a\\\": {\\\"b\\\": [1, 2]}}\") {\n"
+        "    ok(d) -> d\n"
+        "    err(e) -> {}\n"
+        "}\n"
+        "print(data[\"a\"][\"b\"][1])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "2\n");
+}
+
+AGO_TEST(test_vm_json_stringify) {
+    int r = vm_run_and_capture(
+        "let m = {\"name\": \"ago\", \"nums\": [1, 2]}\n"
+        "print(json_stringify(m))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "{\"name\":\"ago\",\"nums\":[1,2]}\n");
+}
+
+AGO_TEST(test_vm_json_roundtrip) {
+    int r = vm_run_and_capture(
+        "let original = \"{\\\"x\\\": 42, \\\"y\\\": true, \\\"z\\\": null}\"\n"
+        "let parsed = match json_parse(original) {\n"
+        "    ok(d) -> d\n"
+        "    err(e) -> {}\n"
+        "}\n"
+        "print(parsed[\"x\"])\n"
+        "print(parsed[\"y\"])\n"
+        "print(parsed[\"z\"])");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "42\ntrue\nnil\n");
+}
+
+AGO_TEST(test_vm_json_parse_error) {
+    int r = vm_run_and_capture(
+        "let result = json_parse(\"invalid json\")\n"
+        "let msg = match result {\n"
+        "    ok(d) -> \"ok\"\n"
+        "    err(e) -> \"error\"\n"
+        "}\n"
+        "print(msg)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "error\n");
+}
+
+AGO_TEST(test_vm_env) {
+    /* HOME should always be set */
+    int r = vm_run_and_capture(
+        "let h = match env(\"HOME\") {\n"
+        "    ok(v) -> \"found\"\n"
+        "    err(e) -> \"missing\"\n"
+        "}\n"
+        "print(h)");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "found\n");
+}
+
+AGO_TEST(test_vm_env_default) {
+    int r = vm_run_and_capture(
+        "print(env_default(\"AGO_NONEXISTENT_VAR_12345\", \"fallback\"))");
+    AGO_ASSERT_INT_EQ(ctx, r, 0);
+    AGO_ASSERT_STR_EQ(ctx, captured_output, "fallback\n");
+}
+
 int main(void) {
     AgoTestCtx ctx = {0, 0};
     printf("\n=== VM Tests ===\n");
@@ -366,6 +455,16 @@ int main(void) {
     AGO_RUN_TEST(&ctx, test_vm_starts_ends);
     AGO_RUN_TEST(&ctx, test_vm_join);
     AGO_RUN_TEST(&ctx, test_vm_substr);
+
+    /* JSON & env tests */
+    AGO_RUN_TEST(&ctx, test_vm_json_parse_object);
+    AGO_RUN_TEST(&ctx, test_vm_json_parse_array);
+    AGO_RUN_TEST(&ctx, test_vm_json_parse_nested);
+    AGO_RUN_TEST(&ctx, test_vm_json_stringify);
+    AGO_RUN_TEST(&ctx, test_vm_json_roundtrip);
+    AGO_RUN_TEST(&ctx, test_vm_json_parse_error);
+    AGO_RUN_TEST(&ctx, test_vm_env);
+    AGO_RUN_TEST(&ctx, test_vm_env_default);
 
     AGO_SUMMARY(&ctx);
 }
