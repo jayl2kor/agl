@@ -1,59 +1,269 @@
-# AGL
+# AGL — Agent Language
 
-### A programming language designed for AI agents.
-
-AGL (Agent Language) is a statically-scoped, dynamically-typed language built in
-C11. It compiles to bytecode and runs on a stack-based virtual machine, with
-built-in support for JSON, HTTP, process execution, and environment variables --
-the primitives an AI agent needs to interact with the outside world.
+A general-purpose programming language designed for AI agents.
+Built from scratch in C11 with a bytecode compiler and stack-based virtual machine.
 
 ---
 
-## Features
+## What is AGL?
 
-- **Bytecode VM** -- 46-opcode stack machine with mark-and-sweep GC
-- **Maps** -- `{}` literals with bracket access, ideal for JSON-shaped data
-- **JSON** -- `json_parse` / `json_stringify` built in, no external dependencies
-- **HTTP** -- `http_get` / `http_post` via libcurl
-- **Result type** -- `ok`/`err` with `match` expressions and `?` error propagation
-- **String interpolation** -- `f"Hello, {name}!"`
-- **Closures** -- first-class functions, lambdas, `map`/`filter`
-- **Modules** -- file-based `import` system with cycle detection
-- **Process execution** -- `exec` for running subprocesses
-- **671+ tests** -- AddressSanitizer and UBSan clean
+AGL is a **fully implemented programming language** — not a DSL, not a parser prototype, not a rule engine. It has:
+
+- A **lexer** that tokenizes source with Go-style auto-semicolon insertion
+- A **recursive-descent parser** that produces a typed AST (27 node kinds)
+- A **semantic analyzer** with 2-pass scope resolution and forward reference support
+- A **bytecode compiler** that emits 46 distinct opcodes into chunk objects
+- A **stack-based virtual machine** that executes bytecode with a mark-and-sweep garbage collector
+- A **standard library** of 40 built-in functions (HTTP, JSON, file I/O, process execution, string manipulation)
+- **671+ tests** running under AddressSanitizer and UBSan, across 6 test suites
+
+The entire implementation is ~8,500 lines of C11 with zero external dependencies for the core language (libcurl is optional for HTTP).
+
+---
+
+## Compilation Pipeline
+
+AGL is not interpreted by walking an AST. Source code goes through a full compilation pipeline:
+
+```
+Source (.agl)
+    │
+    ▼
+  Lexer ─────────── Tokenize with auto-semicolons (34 token types)
+    │
+    ▼
+  Parser ────────── Recursive-descent + Pratt parsing → AST (27 node kinds)
+    │
+    ▼
+  Sema ──────────── 2-pass semantic analysis (scope, immutability, arity)
+    │
+    ▼
+  Compiler ──────── AST → Bytecode IR (46 opcodes, constant pool)
+    │
+    ▼
+  VM ────────────── Stack-based execution, mark-and-sweep GC
+```
+
+### Bytecode IR
+
+The compiler produces `AglChunk` objects — the intermediate representation:
+
+```c
+typedef struct AglChunk {
+    uint8_t *code;              // bytecode array
+    int code_count;
+    struct AglVal *constants;   // constant pool (literals, function objects)
+    int const_count;
+} AglChunk;
+```
+
+Each function compiles to its own chunk. The 46 opcodes cover:
+
+| Category | Opcodes |
+|----------|---------|
+| Constants | `CONST`, `NIL`, `TRUE`, `FALSE` |
+| Arithmetic | `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEGATE` |
+| Comparison | `EQ`, `NEQ`, `LT`, `GT`, `LE`, `GE` |
+| Logic | `NOT` |
+| Variables | `DEFINE_LET`, `DEFINE_VAR`, `GET_VAR`, `SET_VAR` |
+| Stack | `POP`, `POP_SCOPE` |
+| Control flow | `JUMP`, `JUMP_BACK`, `JUMP_IF_FALSE`, `JUMP_IF_TRUE` |
+| Functions | `CLOSURE`, `CALL`, `RETURN`, `RETURN_NIL`, `CALL_BUILTIN` |
+| Data structures | `ARRAY`, `INDEX`, `STRUCT`, `GET_FIELD`, `MAP` |
+| Error handling | `RESULT_OK`, `RESULT_ERR`, `MATCH`, `TRY` |
+| Iteration | `ITER_SETUP`, `ITER_NEXT`, `ITER_CLEANUP` |
+| Modules | `IMPORT` |
+| Debug | `LINE` |
+
+### Garbage Collector
+
+The VM uses a mark-and-sweep GC with an intrusive linked list:
+
+```c
+typedef struct AglObj {
+    struct AglObj *next;        // intrusive linked list of all objects
+    size_t size;                // allocation size for GC accounting
+    void (*cleanup)(void *obj); // free internal buffers before sweep
+    bool marked;
+} AglObj;
+```
+
+GC roots: value stack + environment + call frame closures.
+Collection triggers at statement boundaries when `bytes_allocated > threshold`.
+Threshold grows by 2x after each sweep (minimum 1 MB).
 
 ---
 
 ## Quick Start
 
 ```bash
-make                        # build (debug with ASan + UBSan)
+git clone https://github.com/jayl2kor/agl.git
+cd agl
+make
 ./agl examples/hello.agl    # run a program
 ./agl                       # interactive REPL
 ```
 
 ---
 
-## Hello World
+## Language Features
+
+### Variables and State
+
+AGL has mutable and immutable bindings. It is **not stateless**.
 
 ```agl
-print("Hello, World!")
+let name = "AGL"           // immutable
+var count = 0              // mutable
+count = count + 1
+print(f"{name}: {count}")  // AGL: 1
 ```
 
+### Control Flow
+
+Full control flow: `if`/`else`, `while`, `for-in`, `break`, `continue`.
+
+```agl
+for i in [1, 2, 3, 4, 5] {
+    if i % 2 == 0 { continue }
+    if i > 3 { break }
+    print(i)
+}
+// Output: 1, 3
 ```
-$ ./agl examples/hello.agl
-Hello, World!
+
+### Functions and Closures
+
+First-class functions, closures with captured state, higher-order functions.
+
+```agl
+fn make_adder(n: int) -> fn {
+    return fn(x: int) -> int { return n + x }
+}
+
+let add5 = make_adder(5)
+print(add5(10))             // 15
+
+let doubled = map([1, 2, 3], fn(x: int) -> int { return x * 2 })
+print(doubled)              // [2, 4, 6]
+```
+
+Forward references work — functions can call each other regardless of definition order:
+
+```agl
+fn is_even(n: int) -> bool {
+    if n == 0 { return true }
+    return is_odd(n - 1)
+}
+fn is_odd(n: int) -> bool {
+    if n == 0 { return false }
+    return is_even(n - 1)
+}
+print(is_even(10))          // true
+```
+
+### Result Type and Error Propagation
+
+Built-in `ok`/`err` constructors, `match` expressions, and `?` operator for concise error propagation.
+
+```agl
+fn safe_div(a: int, b: int) -> result {
+    if b == 0 { return err("division by zero") }
+    return ok(a / b)
+}
+
+// Pattern matching
+match safe_div(10, 0) {
+    ok(v) -> print(v)
+    err(e) -> print(e)      // division by zero
+}
+
+// ? operator: unwraps ok, propagates err
+fn pipeline() -> result {
+    let a = safe_div(10, 2)?    // ok(5) → 5
+    let b = safe_div(a, 0)?     // err → returns err immediately
+    return ok(b)
+}
+```
+
+### Maps and JSON
+
+Map literals, bracket access, and built-in JSON serialization.
+
+```agl
+let config = {"host": "localhost", "port": 8080, "debug": true}
+print(config["host"])           // localhost
+print(map_keys(config))        // ["host", "port", "debug"]
+
+let json = json_stringify(config)
+print(json)                     // {"host":"localhost","port":8080,"debug":true}
+
+let parsed = json_parse(json)?
+print(parsed["port"])           // 8080
+```
+
+### HTTP and External Interaction
+
+HTTP client, process execution, environment variables, file I/O.
+
+```agl
+// HTTP
+let resp = http_get("https://api.example.com/data", {})?
+let data = json_parse(resp["body"])?
+
+// Process execution
+let result = exec("git", ["status", "--porcelain"])?
+print(trim(result["stdout"]))
+
+// Environment variables
+let api_key = env("API_KEY")?
+
+// File I/O
+write_file("/tmp/out.json", json_stringify(data))?
+let content = read_file("/tmp/out.json")?
+```
+
+### String Interpolation
+
+```agl
+let name = "world"
+let x = 42
+print(f"Hello, {name}! The answer is {x + 1}.")
+// Hello, world! The answer is 43.
+```
+
+### Modules
+
+File-based import system with path traversal protection and cycle detection.
+
+```agl
+// math.agl
+fn square(n: int) -> int { return n * n }
+
+// main.agl
+import "math"
+print(square(7))    // 49
+```
+
+### Structs
+
+```agl
+struct Point {
+    x: int
+    y: int
+}
+let p = Point { x: 10, y: 20 }
+print(p.x + p.y)               // 30
 ```
 
 ---
 
 ## AI Agent Example
 
-Call an LLM API, parse the response, and print the result:
+Call the Claude API, parse the JSON response, and print the result:
 
 ```agl
 let api_key = env("ANTHROPIC_API_KEY")?
-let url = "https://api.anthropic.com/v1/messages"
 
 let body = json_stringify({
     "model": "claude-sonnet-4-20250514",
@@ -67,250 +277,47 @@ var headers = map_set({}, "content-type", "application/json")
 let headers = map_set(headers, "x-api-key", api_key)
 let headers = map_set(headers, "anthropic-version", "2023-06-01")
 
-let resp = http_post(url, headers, body)?
+let resp = http_post("https://api.anthropic.com/v1/messages", headers, body)?
 let data = json_parse(resp["body"])?
 print(data["content"][0]["text"])
 ```
 
 ---
 
-## Language Overview
+## Standard Library (40 functions)
 
-### Variables
-
-```agl
-let name = "AGL"           // immutable binding
-var count = 0              // mutable binding
-count = count + 1
-```
-
-### Functions
-
-```agl
-fn greet(name: string) {
-    print(f"Hello, {name}!")
-}
-
-fn add(a: int, b: int) -> int {
-    return a + b
-}
-```
-
-### Closures and Higher-Order Functions
-
-```agl
-let double = fn(x: int) -> int { return x * 2 }
-let doubled = map([1, 2, 3], double)   // [2, 4, 6]
-
-let evens = filter([1, 2, 3, 4], fn(x: int) -> bool {
-    return x % 2 == 0
-})
-// [2, 4]
-```
-
-### Control Flow
-
-```agl
-if x > 0 {
-    print("positive")
-} else if x == 0 {
-    print("zero")
-} else {
-    print("negative")
-}
-
-for item in [10, 20, 30] {
-    print(item)
-}
-
-var i = 0
-while i < 10 {
-    i = i + 1
-}
-```
-
-### Result Type and Error Handling
-
-```agl
-fn safe_div(a: int, b: int) -> result {
-    if b == 0 {
-        return err("division by zero")
-    }
-    return ok(a / b)
-}
-
-// Pattern matching
-match safe_div(10, 0) {
-    ok(v) -> print(v)
-    err(e) -> print(e)          // division by zero
-}
-
-// Error propagation with ?
-let value = safe_div(10, 3)?    // unwraps ok, propagates err
-```
-
-### Maps
-
-```agl
-let config = {"host": "localhost", "port": 8080}
-let host = config["host"]
-let keys = map_keys(config)             // ["host", "port"]
-let updated = map_set(config, "debug", true)
-```
-
-### String Interpolation
-
-```agl
-let name = "world"
-print(f"Hello, {name}!")
-print(f"2 + 2 = {2 + 2}")
-```
-
-### Structs
-
-```agl
-struct Point {
-    x: int
-    y: int
-}
-
-let p = Point { x: 10, y: 20 }
-print(p.x + p.y)               // 30
-```
+| Category | Functions |
+|----------|----------|
+| **I/O** | `print` |
+| **Types** | `type`, `len`, `str`, `int`, `float` |
+| **Arrays** | `push`, `map`, `filter` |
+| **Math** | `abs`, `min`, `max` |
+| **Strings** | `split`, `trim`, `contains`, `replace`, `starts_with`, `ends_with`, `to_upper`, `to_lower`, `join`, `substr` |
+| **Maps** | `map_get`, `map_set`, `map_keys`, `map_has`, `map_del` |
+| **JSON** | `json_parse`, `json_stringify` |
+| **HTTP** | `http_get`, `http_post` |
+| **File I/O** | `read_file`, `write_file`, `file_exists` |
+| **Process** | `exec` |
+| **Environment** | `env`, `env_default` |
+| **Time** | `now`, `sleep` |
+| **Result** | `ok`, `err` |
 
 ---
 
-## Standard Library
+## Project Stats
 
-40 built-in functions grouped by category.
-
-### I/O
-
-| Function | Description |
-|----------|-------------|
-| `print(args...)` | Print values to stdout with newline |
-
-### Type Inspection and Conversion
-
-| Function | Description |
-|----------|-------------|
-| `type(val)` | Type name as string (`"int"`, `"string"`, ...) |
-| `len(x)` | Length of string or array |
-| `str(val)` | Convert any value to string |
-| `int(x)` | Convert string or float to integer |
-| `float(x)` | Convert string or int to float |
-
-### Arrays
-
-| Function | Description |
-|----------|-------------|
-| `push(arr, val)` | New array with val appended |
-| `map(arr, fn)` | Apply fn to each element, return new array |
-| `filter(arr, fn)` | Keep elements where fn returns truthy |
-
-### Math
-
-| Function | Description |
-|----------|-------------|
-| `abs(n)` | Absolute value |
-| `min(a, b)` | Minimum of two numbers |
-| `max(a, b)` | Maximum of two numbers |
-
-### Strings
-
-| Function | Description |
-|----------|-------------|
-| `split(s, sep)` | Split string into array by separator |
-| `trim(s)` | Remove leading/trailing whitespace |
-| `contains(s, sub)` | Check if string contains substring |
-| `replace(s, old, new)` | Replace all occurrences |
-| `starts_with(s, prefix)` | Check string prefix |
-| `ends_with(s, suffix)` | Check string suffix |
-| `to_upper(s)` | Convert to uppercase |
-| `to_lower(s)` | Convert to lowercase |
-| `join(arr, sep)` | Join array elements into string |
-| `substr(s, start, len)` | Extract substring |
-| `count(s, sub)` | Count occurrences of substring |
-
-### Maps
-
-| Function | Description |
-|----------|-------------|
-| `map_get(m, key)` | Get value by key |
-| `map_set(m, key, val)` | New map with key set |
-| `map_keys(m)` | Array of all keys |
-| `map_has(m, key)` | Check if key exists |
-| `map_del(m, key)` | New map with key removed |
-
-### JSON
-
-| Function | Description |
-|----------|-------------|
-| `json_parse(s)` | Parse JSON string into AGL value (result) |
-| `json_stringify(val)` | Serialize AGL value to JSON string |
-
-### Environment
-
-| Function | Description |
-|----------|-------------|
-| `env(name)` | Get environment variable (result) |
-| `env_default(name, fallback)` | Get env var with fallback value |
-
-### HTTP
-
-| Function | Description |
-|----------|-------------|
-| `http_get(url, headers)` | HTTP GET request (result) |
-| `http_post(url, headers, body)` | HTTP POST request (result) |
-
-### File I/O
-
-| Function | Description |
-|----------|-------------|
-| `read_file(path)` | Read file contents (result) |
-| `write_file(path, content)` | Write string to file (result) |
-| `file_exists(path)` | Check if file exists |
-
-### Process
-
-| Function | Description |
-|----------|-------------|
-| `exec(cmd, args)` | Execute subprocess (result) |
-
-### Time
-
-| Function | Description |
-|----------|-------------|
-| `now()` | Current time in milliseconds (epoch) |
-| `sleep(ms)` | Pause execution for ms milliseconds |
-
-### Result Constructors
-
-| Form | Description |
-|------|-------------|
-| `ok(val)` | Wrap value as success |
-| `err(val)` | Wrap value as error |
-
----
-
-## Architecture
-
-```
-Source (.agl)
-    |
-  Lexer         Tokenize with Go-style auto-semicolon insertion
-    |
-  Parser        Recursive-descent parser producing an AST
-    |
-  Sema          Semantic analysis -- scope checks and validation
-    |
-  Compiler      AST to bytecode (46 opcodes)
-    |
-  VM            Stack-based execution with mark-and-sweep GC
-```
-
-The compiler and runtime share no mutable state. AST nodes and tokens are
-arena-allocated; runtime heap objects are tracked by the garbage collector.
+| Metric | Value |
+|--------|-------|
+| Language | C11 (no external deps for core) |
+| Source files | 38 (.c and .h) |
+| Lines of code | ~8,500 |
+| Test assertions | 671+ |
+| Test suites | 6 (Lexer, Parser, Sema, Interpreter, GC, VM) |
+| Bytecode opcodes | 46 |
+| Built-in functions | 40 |
+| AST node types | 27 |
+| Token types | 34 |
+| Memory safety | ASan + UBSan enabled in all builds |
 
 ---
 
@@ -318,39 +325,32 @@ arena-allocated; runtime heap objects are tracked by the garbage collector.
 
 ### Requirements
 
-- **C11 compiler** -- Clang or GCC
-- **POSIX environment** -- macOS or Linux
-- **libcurl** (optional) -- enables `http_get` and `http_post`
-
-If libcurl is not installed, AGL builds without HTTP support and the HTTP
-builtins return a runtime error.
+- **C11 compiler** (Clang or GCC)
+- **POSIX environment** (macOS or Linux)
+- **libcurl** (optional, for HTTP support)
 
 ### Make Targets
 
-| Target | Description |
-|--------|-------------|
-| `make` | Build the `agl` binary (debug, ASan + UBSan enabled) |
-| `make test` | Run all 671+ tests |
-| `make clean` | Remove build artifacts |
+```bash
+make            # build the agl binary (debug, ASan + UBSan)
+make test       # run all 671+ tests
+make clean      # remove build artifacts
+```
 
 ---
 
 ## Testing
 
 ```bash
-make test
+$ make test
+
+--- 139 passed, 0 failed ---    # Lexer
+--- 117 passed, 0 failed ---    # Parser
+---  23 passed, 0 failed ---    # Sema
+--- 232 passed, 0 failed ---    # Interpreter
+---  19 passed, 0 failed ---    # GC
+--- 141 passed, 0 failed ---    # VM
 ```
-
-Runs 671+ tests across six modules:
-
-| Module | Coverage |
-|--------|----------|
-| Lexer | Tokenization, auto-semicolons, edge cases |
-| Parser | AST construction, error recovery |
-| Sema | Scope analysis, semantic validation |
-| Interpreter | Tree-walk execution (reference implementation) |
-| GC | Mark-and-sweep correctness, cycle handling |
-| VM | Bytecode execution, builtins, all language features |
 
 All tests run under AddressSanitizer and UndefinedBehaviorSanitizer.
 
@@ -358,12 +358,13 @@ All tests run under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [Language Specification](docs/spec.md) | Complete grammar, types, and semantics |
-| [Getting Started Tutorial](docs/tutorial.md) | Build, run, and write your first programs |
-| [Standard Library Reference](docs/stdlib.md) | Full API for all built-in functions |
-| [Error Catalog](docs/errors.md) | Error codes, messages, and troubleshooting |
+| Document | URL |
+|----------|-----|
+| **Documentation Site** | [jayl2kor.github.io/agl](https://jayl2kor.github.io/agl/) |
+| Language Specification | [docs/spec.md](docs/spec.md) |
+| Getting Started | [docs/tutorial.md](docs/tutorial.md) |
+| Standard Library | [docs/stdlib.md](docs/stdlib.md) |
+| Error Catalog | [docs/errors.md](docs/errors.md) |
 
 ---
 
